@@ -9,7 +9,7 @@ object lives in st.session_state rather than being rebuilt (and emptied) each
 time. Everything else is derived from that one object.
 """
 
-from datetime import time
+from datetime import date, time
 
 import streamlit as st
 
@@ -50,6 +50,17 @@ def reset_data() -> None:
 
 owner = get_owner()
 st.session_state.setdefault("show_plan", False)
+
+
+def get_scheduler() -> Scheduler:
+    """Build a Scheduler from the saved day window, fresh on every run."""
+    return Scheduler(
+        day_start=st.session_state.get("day_start", time(8, 0)),
+        day_end=st.session_state.get("day_end", time(21, 0)),
+    )
+
+
+scheduler = get_scheduler()
 
 
 # --- Owner constraints (sidebar) -------------------------------------------
@@ -182,17 +193,23 @@ if owner.pets:
     if st.session_state.get("last_follow_up"):
         st.success(f"Done — {st.session_state.pop('last_follow_up')}")
 
-    show = st.radio(
-        "Show",
-        ["All", "Pending", "Done"],
-        horizontal=True,
-        label_visibility="collapsed",
-    )
+    controls = st.columns([2, 2])
+    with controls[0]:
+        show = st.radio(
+            "Show",
+            ["All", "Pending", "Done"],
+            horizontal=True,
+            help="Filters with Pet.filter_tasks(completed=...)",
+        )
+    with controls[1]:
+        order_by = st.radio(
+            "Order by",
+            ["Entered", "Time", "Priority"],
+            horizontal=True,
+            help="Sorts with Scheduler.sort_by_time() / sort_by_priority()",
+        )
     status = {"All": None, "Pending": False, "Done": True}[show]
 
-    # Widget keys and removals use list position, not the name/title: two tasks
-    # may legitimately share a title (a morning and an evening "Walk"), and
-    # keying on the title both collides and deletes the wrong row.
     for pet_index, pet in enumerate(list(owner.pets)):
         with st.container(border=True):
             header, remove = st.columns([5, 1])
@@ -210,11 +227,25 @@ if owner.pets:
                 st.caption(f"No {show.lower()} tasks.")
                 continue
 
-            # enumerate the full list so keys and removals stay aligned with
-            # the real positions, then skip the rows the filter excludes.
-            for task_index, task in enumerate(list(pet.tasks)):
-                if not any(task is shown for shown in visible):
+            # Rows carry their real list position, because widget keys and
+            # removals must stay aligned with pet.tasks even when the display
+            # is filtered or reordered. Two tasks may share a title, so rows
+            # are matched by object identity rather than by value.
+            rows = list(enumerate(pet.tasks))
+            if order_by != "Entered":
+                sorter = (
+                    scheduler.sort_by_time
+                    if order_by == "Time"
+                    else scheduler.sort_by_priority
+                )
+                rank = {id(task): i for i, task in enumerate(sorter(pet.tasks))}
+                rows.sort(key=lambda row: rank[id(row[1])])
+
+            shown = {id(task) for task in visible}
+            for task_index, task in rows:
+                if id(task) not in shown:
                     continue
+
                 done_col, text_col, drop_col = st.columns([1.4, 6, 1])
 
                 # A button rather than a checkbox: checkbox state sticks to its
@@ -253,6 +284,12 @@ if owner.pets:
                     pet.remove_task_at(task_index)
                     st.rerun()
 
+            pending = len(pet.filter_tasks(completed=False))
+            st.caption(
+                f"{len(pet.tasks)} tasks · {pending} pending · "
+                f"{pet.minutes_needed_on(date.today())} min of care due today"
+            )
+
 
 # --- Build the schedule -----------------------------------------------------
 
@@ -268,16 +305,24 @@ if st.session_state.show_plan:
     if not owner.all_tasks():
         st.warning("There are no tasks to schedule yet.")
     else:
-        # Built fresh on every run, so edits above are always reflected below.
-        scheduler = Scheduler(
-            day_start=st.session_state.get("day_start", time(8, 0)),
-            day_end=st.session_state.get("day_end", time(21, 0)),
-        )
-        # Warn before planning: the scheduler resolves overlaps by skipping the
-        # loser, which is safe but silent, so the owner should see the clash.
-        warnings = scheduler.conflict_warnings(owner, day=plan_day)
-        for warning in warnings:
-            st.warning(warning, icon="⚠️")
+        # Warn before showing the plan. The scheduler resolves an overlap by
+        # keeping the earlier task and skipping the later one, which is safe
+        # but silent — so the owner needs to see both the clash and what
+        # PawPal+ decided, since only they can actually move a fixed time.
+        conflicts = scheduler.find_conflicts(owner, day=plan_day)
+        if conflicts:
+            with st.container(border=True):
+                st.markdown(
+                    f"**⚠️ {len(conflicts)} timing "
+                    f"{'conflict' if len(conflicts) == 1 else 'conflicts'}**"
+                )
+                for conflict in conflicts:
+                    st.warning(conflict.message, icon="⚠️")
+                    st.caption(
+                        f"PawPal+ will keep **{conflict.first.title}** and skip "
+                        f"**{conflict.second.title}**. Change one of the two "
+                        f"fixed times above if that is the wrong call."
+                    )
 
         plans = scheduler.build_plans(owner, day=plan_day)
 

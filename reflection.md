@@ -180,13 +180,108 @@ vet visit — has to be deleted after completion rather than simply finished. A
 
 **a. How you used AI**
 
-- How did you use AI tools during this project (for example: design brainstorming, debugging, refactoring)?
-- What kinds of prompts or questions were most helpful?
+I used an AI coding assistant across all six phases: brainstorming the class
+breakdown, generating the skeleton from the UML, implementing the scheduler,
+drafting tests, and debugging. The work split roughly into three kinds of ask.
+
+*Generation from a spec I had already fixed.* "Turn this UML into dataclasses
+with empty method stubs" and "write tests for these four scheduling rules" were
+the highest-value prompts, because I had already decided what I wanted and the
+answer was mechanical. This is where the assistant saved the most time.
+
+*Review of something concrete.* Attaching `pawpal_system.py` and asking "what
+relationships are missing, and where are the logic bottlenecks?" produced the
+four changes in section 1b. Asking about a *specific file* worked; asking
+open-ended questions like "is this good code?" produced generic advice I could
+not act on.
+
+*Verification by running things.* The most useful habit was not a prompt at
+all. Three of the bugs in this project were invisible in the source and obvious
+in the output — the `IntEnum` printing `2` instead of `medium`, the cat's nail
+trim starving the dog's breakfast, and two pets booked at 08:00. Running
+`main.py` and reading it found all three. Later I did the same for the UI with
+Streamlit's `AppTest` harness, which is how I found that duplicate task titles
+crashed the page. Code that has been read is not code that has been run.
 
 **b. Judgment and verification**
 
-- Describe one moment where you did not accept an AI suggestion as-is.
-- How did you evaluate or verify what the AI suggested?
+The clearest case of not accepting a suggestion was rejecting my own cleverer
+one. I wrote `find_conflicts()` first as a sweep line: sort the fixed-time
+tasks by start, keep a list of still-active tasks, compare each new task only
+against those. O(n log n), about 20 lines, and the kind of thing that looks
+impressive. Then I rewrote it as six lines of `itertools.combinations` that
+compares every pair, which is O(n²), and kept that version. `n` is the
+fixed-time tasks due on one day — a couple of dozen at the very most — so the
+faster algorithm was solving a problem this app does not have, and the pairwise
+version reads as the definition of the thing ("every pair that overlaps")
+rather than as an algorithm you have to trust.
+
+Two smaller ones. In Phase 1 I was advised to add a `recurrence` field to
+`Task`, and left it out, because no logic read it yet and an unused field in a
+skeleton is a guess about the future; when Phase 2 actually specified
+frequency, it went in with `is_due_on()` to consume it. And in Phase 3, the
+obvious control for "task done" is `st.checkbox` — I used a button instead,
+because Streamlit widget state sticks to its key, so after deleting a row the
+shifted indices would make a checkbox inherit the deleted row's state and
+complete the wrong task.
+
+How I verified things rather than trusting them:
+
+- **Tests as an equivalence proof.** The 44 tests passing unchanged across the
+  sweep-to-`combinations` swap is what turned a risky rewrite into a
+  readability decision.
+- **Diffing documentation against reality.** The sample output in `README.md`
+  is checked line by line against live `python main.py` output, so the README
+  cannot quietly drift from the code.
+- **Checking the diagram against the code.** I verified `uml_final.mmd` in both
+  directions — every member in the diagram exists in `pawpal_system.py`, and
+  every public member in the code appears in the diagram.
+- **Coverage as a gap finder, not a score.** The 93%-to-100% pass was worth
+  doing because of *what* was uncovered: `Owner.remove_pet()` had no test at
+  all, and neither did the branch of `_pack()` that skips a task whose
+  preferred time is already taken — a behavior I had claimed in a commit
+  message.
+
+**c. AI strategy**
+
+*Which assistant features were most effective.* Multi-file agent edits, for
+changes that genuinely span files — adding `due_date` touched the logic layer,
+the CLI demo, the tests and the UI together, and doing that as one coherent
+change avoided the half-migrated state you get from editing files one at a
+time. Second, the ability to *run* code and read real output, which is what
+actually caught the bugs. Third, targeted review of a named file. Least
+effective: anything open-ended. "Suggest improvements" reliably produced a list
+of plausible features that would have made the system worse, like caching the
+schedule or adding a database.
+
+*Separate chat sessions.* The assignment suggests a fresh session per phase. In
+practice I ran the whole build as one continuous session, so I should be honest
+about what that traded away rather than claim a benefit I did not get. What
+continuity bought was real: at the end of Phase 1 I flagged "how to split the
+time budget between pets" as an open question, and the first Phase 2 demo run
+answered it; in Phase 5 I worked from the edge-case list I had written in
+section 4b in Phase 2, which is how the duplicate-pet-name bug got found. A
+fresh session would have needed all of that re-established, and would probably
+have skipped it. What it cost is the outside view. A separate session would not
+have known that I had already chosen a greedy scheduler, and might have
+questioned it instead of building on it — the risk of one long session is that
+early decisions stop being decisions and become the furniture. Where I did get
+that effect, it came from changing *activity* rather than session: writing
+tests, which forces you to state what the code should do, and reading terminal
+output, which does not care what you intended.
+
+*Being the lead architect.* The assistant was consistently better at producing
+code than at deciding what the code should be. Every judgment that mattered in
+this project was a scoping or values call, not a technical one: that priority
+must be compared across pets rather than pet-by-pet, because "the dog got fed"
+beats "more boxes ticked"; that a fixed-time task should be dropped with a
+warning rather than silently moved, because insulin at 09:40 is not the same
+event as insulin at 09:00; that a readable O(n²) beats a clever O(n log n) at
+this scale. None of those are answerable from the code alone — they come from
+knowing what the app is *for*. The failure mode I had to watch was accepting
+something because it was well-formed. Fluent code is not correct code, and the
+only reliable defence I found was to keep asking for the thing that cannot be
+faked: run it, and look at what came out.
 
 ---
 
@@ -255,12 +350,58 @@ What I would test next, in order:
 
 **a. What went well**
 
-- What part of this project are you most satisfied with?
+The layering. `pawpal_system.py` imports no Streamlit, which sounds like a
+detail and turned out to be the decision everything else rested on. It let me
+build the scheduler CLI-first and see it working in a terminal before any UI
+existed, drive the same logic from `main.py`, the app and 87 tests, and get to
+100% line coverage of the logic without fighting a UI framework. When I later
+found UI bugs, they were *only* UI bugs — the scheduling rules were never in
+question, because they had never been entangled with the rendering.
+
+The other thing I am satisfied with is that the app explains itself. Every
+scheduled task carries the reason it got its slot and every dropped task
+carries the reason it did not fit. That started as a README requirement and
+ended up being the feature that made the system debuggable: the Phase 2
+priority-inversion bug was obvious the moment the output said *why* the cat's
+nail trim had been chosen.
 
 **b. What you would improve**
 
-- If you had another iteration, what would you improve or redesign?
+Three things, in order.
+
+1. **Add `Frequency.ONCE`.** Every task currently recurs, so a one-off vet
+   visit has to be deleted after completion instead of simply being finished.
+   This is the sharpest edge a real user would hit.
+2. **Handle a clash by offering the next free slot.** Right now an overlapping
+   fixed-time task is dropped with a warning. Better would be to keep the
+   warning but offer "move Thyroid meds to 08:30?" as a one-click choice —
+   still the owner's decision, but with the arithmetic done for them.
+3. **Reconsider the greedy pass.** With 40 minutes free the scheduler takes a
+   30-minute task and then rejects a 25-minute one, leaving 10 minutes idle. A
+   second pass over `DailyPlan.skipped` looking for anything that fits the
+   leftover gaps would waste less of the day without touching the priority
+   guarantee.
+
+Further out, the design assumes one owner and one device. `st.session_state`
+means data lives and dies with a browser session, so nothing survives a
+refresh, and there is no notion of two people sharing pet care.
 
 **c. Key takeaway**
 
-- What is one important thing you learned about designing systems or working with AI on this project?
+Design decisions are mostly about what to leave out, and running the code is
+the only way to find out whether you left out the right things.
+
+Both halves of that came from the same moment. My Phase 1 design was defensible
+on paper — four classes, clean responsibilities, a scheduler that read the
+owner's budget. It also contained a bug I could not see: planning pets one at a
+time meant one pet's low-priority tasks could starve another pet's
+high-priority ones. No amount of re-reading the class diagram would have
+surfaced that. Nine lines of demo output did, immediately, because a scheduler
+that feeds the cat's nail trim before the dog's breakfast is obviously wrong to
+a human in a way it is not obvious in a UML box.
+
+The corollary for working with AI is the same lesson from the other side. The
+assistant was never short of things to add — a cache, a database, a
+`recurrence` field three phases before anything read it. Saying no to most of
+them, and yes to the small number that the scenario actually demanded, was the
+part of this project that was genuinely mine.

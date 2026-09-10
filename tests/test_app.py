@@ -191,3 +191,80 @@ def test_schedule_warns_when_there_is_nothing_to_plan() -> None:
 
     assert not app.exception
     assert any("no tasks to schedule" in w.value for w in app.warning)
+
+
+def _visible_titles(app: AppTest, titles: tuple[str, ...]) -> list[str]:
+    """Return the task titles in the order the page rendered them."""
+    return [
+        next(t for t in titles if block.value.startswith(t))
+        for block in app.markdown
+        if any(block.value.startswith(t) for t in titles)
+    ]
+
+
+def test_order_by_control_uses_the_scheduler_sort_methods() -> None:
+    """The Order by control reorders rows via sort_by_time / sort_by_priority."""
+    app = make_app()
+    pet = Pet("Mochi", "dog")
+    pet.add_task(Task("Evening walk", 25, priority=Priority.MEDIUM, preferred_time=time(18, 0)))
+    pet.add_task(Task("Puzzle feeder", 15, priority=Priority.LOW))
+    pet.add_task(Task("Morning walk", 30, priority=Priority.HIGH, preferred_time=time(8, 0)))
+    pet.add_task(Task("Breakfast", 10, priority=Priority.HIGH))
+    app.session_state.owner = Owner("Jordan", 90, pets=[pet])
+    app.run()
+    titles = ("Evening walk", "Puzzle feeder", "Morning walk", "Breakfast")
+
+    app.radio[1].set_value("Entered").run()
+    assert _visible_titles(app, titles) == list(titles)
+
+    # By time: pinned tasks in clock order, unpinned keeping entry order.
+    app.radio[1].set_value("Time").run()
+    assert _visible_titles(app, titles) == [
+        "Morning walk",
+        "Evening walk",
+        "Puzzle feeder",
+        "Breakfast",
+    ]
+
+    # By priority: high first, shortest breaking the tie.
+    app.radio[1].set_value("Priority").run()
+    assert _visible_titles(app, titles) == [
+        "Breakfast",
+        "Morning walk",
+        "Evening walk",
+        "Puzzle feeder",
+    ]
+
+
+def test_reordering_does_not_break_removal() -> None:
+    """With rows sorted, ✕ still deletes the task the row belongs to."""
+    app = make_app()
+    pet = Pet("Mochi", "dog")
+    pet.add_task(Task("Late", 10, preferred_time=time(18, 0)))
+    pet.add_task(Task("Early", 10, preferred_time=time(8, 0)))
+    app.session_state.owner = Owner("Jordan", 90, pets=[pet])
+    app.run()
+    app.radio[1].set_value("Time").run()
+
+    # "Early" is displayed first but is index 1 in pet.tasks.
+    app = app.button(key="rm_task_0_1").click().run()
+
+    assert [t.title for t in app.session_state.owner.pets[0].tasks] == ["Late"]
+
+
+def test_conflict_block_says_what_the_scheduler_decided() -> None:
+    """A conflict warning is paired with the resolution the owner can act on."""
+    app = make_app()
+    mochi = Pet("Mochi", "dog")
+    mochi.add_task(Task("Morning walk", 30, priority=Priority.HIGH, preferred_time=time(8, 0)))
+    pickle = Pet("Pickle", "cat")
+    pickle.add_task(Task("Insulin", 10, priority=Priority.HIGH, preferred_time=time(8, 15)))
+    app.session_state.owner = Owner("Jordan", 90, pets=[mochi, pickle])
+    app.session_state.show_plan = True
+
+    app.run()
+
+    assert any("two places at once" in w.value for w in app.warning)
+    assert any(
+        "keep **Morning walk** and skip **Insulin**" in c.value for c in app.caption
+    )

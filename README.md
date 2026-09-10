@@ -1,26 +1,48 @@
-# PawPal+ (Module 2 Project)
+# PawPal+ 🐾
 
-You are building **PawPal+**, a Streamlit app that helps a pet owner plan care tasks for their pet.
+A pet care planning assistant. You tell PawPal+ about your pets, the care tasks
+they need, and how much time you actually have today — it builds a timed daily
+plan that fits, and explains every choice it made.
+
+Built as a Streamlit app on top of a standalone Python logic layer, so the same
+scheduler runs from the browser, the terminal, and the test suite.
 
 ## Scenario
 
-A busy pet owner needs help staying consistent with pet care. They want an assistant that can:
+A busy pet owner needs help staying consistent with pet care. They want an
+assistant that can:
 
 - Track pet care tasks (walks, feeding, meds, enrichment, grooming, etc.)
 - Consider constraints (time available, priority, owner preferences)
 - Produce a daily plan and explain why it chose that plan
 
-Your job is to design the system first (UML), then implement the logic in Python, then connect it to the Streamlit UI.
+## Features
 
-## What you will build
+**Planning**
 
-Your final app should:
+- **Timed daily plans.** Every scheduled task gets a real start and end time,
+  not just an ordering.
+- **One shared timeline across pets.** The owner has one pair of hands, so no
+  two tasks ever overlap — even for different pets.
+- **One shared time budget.** All pets draw from the minutes you have today.
+  Priority is compared across the whole household, so the cat's medication
+  outranks the dog's nail trim.
+- **Fixed-time anchors.** A task can be pinned to a clock time (medication at
+  09:00), and the scheduler fills the gaps around it.
+- **Explained decisions.** Every task carries the reason it was scheduled where
+  it was, and every dropped task carries the reason it did not fit.
 
-- Let a user enter basic owner + pet info
-- Let a user add/edit tasks (duration + priority at minimum)
-- Generate a daily schedule/plan based on constraints and priorities
-- Display the plan clearly (and ideally explain the reasoning)
-- Include tests for the most important scheduling behaviors
+**Algorithms**
+
+- **Sorting by time** — fixed times in chronological order, flexible tasks last.
+- **Sorting by priority** — highest first, shortest duration breaking ties.
+- **Filtering** — by pet, completion status, priority, frequency or due date.
+- **Daily and weekly recurrence** — completing a task queues its next
+  occurrence; weekly tasks keep their weekday even when completed late.
+- **Conflict warnings** — every pair of fixed-time tasks whose windows overlap
+  is reported before the plan is shown, with what PawPal+ decided about it.
+- **Owner preferences** — keyword matches break ties between equal-priority
+  tasks, without ever outranking a higher-priority task.
 
 ## Getting started
 
@@ -32,15 +54,81 @@ source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Suggested workflow
+### Running
 
-1. Read the scenario carefully and identify requirements and edge cases.
-2. Draft a UML diagram (classes, attributes, methods, relationships).
-3. Convert UML into Python class stubs (no logic yet).
-4. Implement scheduling logic in small increments.
-5. Add tests to verify key behaviors.
-6. Connect your logic to the Streamlit UI in `app.py`.
-7. Refine UML so it matches what you actually built.
+```bash
+# The Streamlit app (the main interface):
+streamlit run app.py
+
+# The CLI demo, which prints a full worked example:
+python main.py
+
+# The test suite:
+python -m pytest
+```
+
+## Project layout
+
+| File | Role |
+|------|------|
+| `pawpal_system.py` | The logic layer: `Owner`, `Pet`, `Task`, `Scheduler` and the plan/conflict types. Imports no Streamlit |
+| `app.py` | The Streamlit UI. Collects input, calls the logic layer, renders results — no scheduling rules of its own |
+| `main.py` | CLI demo of every feature, and the source of the sample data the app's "Load example data" button uses |
+| `tests/test_pawpal.py` | 72 tests over the logic layer |
+| `tests/test_app.py` | 15 tests driving the real Streamlit script through `AppTest` |
+| `diagrams/uml_final.mmd` | Final system architecture |
+| `diagrams/uml.mmd` | Working class diagram kept in sync during the build |
+| `reflection.md` | Design decisions, tradeoffs and AI-collaboration notes |
+
+## Architecture
+
+Dependencies point one way: the UI and the CLI both import the logic layer, and
+nothing in the logic layer imports Streamlit. That is what makes the scheduler
+testable and lets the same code drive a browser and a terminal.
+
+```mermaid
+classDiagram
+    class Owner {
+        +int minutes_available
+        +list~str~ preferences
+        +list~Pet~ pets
+    }
+    class Pet {
+        +list~Task~ tasks
+    }
+    class Task {
+        +int duration_minutes
+        +Priority priority
+        +Frequency frequency
+        +time preferred_time
+        +date due_date
+    }
+    class Scheduler {
+        +build_plans(owner, day) list~DailyPlan~
+        +find_conflicts(owner, day) list~Conflict~
+    }
+    class DailyPlan {
+        +list~ScheduledTask~ scheduled
+        +list~SkippedTask~ skipped
+    }
+    class ScheduledTask
+    class SkippedTask
+    class Conflict
+
+    Owner "1" --> "*" Pet : owns
+    Pet "1" --> "*" Task : needs care
+    Scheduler ..> Owner : reads constraints
+    Scheduler ..> DailyPlan : produces one per pet
+    Scheduler ..> Conflict : reports overlaps
+    DailyPlan "1" --> "*" ScheduledTask : contains
+    DailyPlan "1" --> "*" SkippedTask : records why not
+    ScheduledTask --> Task : places at a time
+    SkippedTask --> Task : explains dropping
+    Conflict --> Task : names the clashing pair
+```
+
+See [`diagrams/uml_final.mmd`](diagrams/uml_final.mmd) for the complete diagram
+with every attribute and method.
 
 ## 🖥️ Sample Output
 
@@ -210,7 +298,7 @@ python -m pytest
 python -m pytest --cov=pawpal_system --cov-report=term-missing
 ```
 
-**What the tests cover** — 84 tests in two files:
+**What the tests cover** — 87 tests in two files:
 
 `tests/test_pawpal.py` (72 tests) covers the logic layer:
 
@@ -224,11 +312,12 @@ python -m pytest --cov=pawpal_system --cov-report=term-missing
 | Scheduling | Priority order, the shared time budget, fixed-time anchors, gap-filling before an anchor, anchors outside the day window, preferences breaking ties, and priority compared *across* pets |
 | Edge cases | Pet with no tasks, owner with no pets, zero minutes available, a task longer than the day window, a task longer than the budget, two pets sharing a name, planning is side-effect free and deterministic |
 
-`tests/test_app.py` (12 tests) drives the real Streamlit script through
+`tests/test_app.py` (15 tests) drives the real Streamlit script through
 `AppTest`, covering what the logic tests cannot: that a pet added in the browser
 survives a rerun, that duplicate task titles do not crash the page, that
 deleting a row and then toggling "Done" hits the right task, and that conflict
-warnings actually reach the screen.
+warnings actually reach the screen, and that the Order by control really
+reorders rows through the `Scheduler` sort methods.
 
 Test run:
 
@@ -238,11 +327,11 @@ platform darwin -- Python 3.13.9, pytest-8.4.2, pluggy-1.5.0
 rootdir: /Users/somamasiddiqui/Desktop/codepathAI/Assign3
 configfile: pytest.ini
 testpaths: tests
-collected 84 items
-tests/test_app.py ............                                           [ 14%]
+collected 87 items
+tests/test_app.py ...............                                        [ 17%]
 tests/test_pawpal.py ................................................... [ 75%]
 .....................                                                    [100%]
-============================== 84 passed in 1.33s ==============================
+============================== 87 passed in 1.54s ==============================
 ```
 
 Coverage of the logic layer:
@@ -255,7 +344,7 @@ Name               Stmts   Miss  Cover   Missing
 pawpal_system.py     328      0   100%
 ------------------------------------------------
 TOTAL                328      0   100%
-============================== 84 passed in 1.76s ==============================
+============================== 87 passed in 2.11s ==============================
 ```
 
 **Confidence level: ★★★★☆ (4/5)**
@@ -292,12 +381,110 @@ concurrent edits from two browser tabs.
 
 ## 📸 Demo Walkthrough
 
-Describe your app in numbered steps so a reader can follow along without watching a video:
+### The interface
 
-1. <!-- Describe this step -->
-2. <!-- Describe this step -->
-3. <!-- Describe this step -->
-4. <!-- Describe this step -->
-5. <!-- Add more steps as needed -->
+The app has three areas, top to bottom:
 
-**Screenshot or video** *(optional)*: <!-- Insert a screenshot or link to a demo video here -->
+1. **Sidebar — your day.** Your name, the minutes you have available today,
+   your preferences as comma-separated keywords, and the clock window the
+   scheduler may use (default 08:00–21:00). Two buttons load the example data
+   or clear all pets and tasks.
+2. **Pets and tasks.** Add pets and their care tasks, then mark tasks done,
+   remove them, filter by status and reorder them by time or priority.
+3. **Today's plan.** Pick a date, press **Generate schedule**, and read the
+   timed plan for each pet with the reasoning for every row.
+
+### An example workflow
+
+1. **Add a pet.** Open *Add a pet*, enter `Mochi`, species `dog`, breed
+   `Shiba Inu`, age `3`, and press **Add pet**. This calls `Owner.add_pet()`
+   and the pet appears immediately under *Pets and tasks*.
+2. **Add a task with a fixed time.** In *Add a care task*, choose `Mochi`,
+   title `Morning walk`, 30 minutes, priority `high`, repeats `daily`. Tick
+   *This has to happen at a specific time* and set `08:00`. Press **Add task**.
+3. **Add flexible tasks.** Add `Breakfast` (10 min, high) and `Puzzle feeder`
+   (15 min, low) with no fixed time. These are free to move.
+4. **Add a weekly task.** Add `Brush coat` (20 min, medium), repeats `weekly`,
+   on `Monday`. It will only appear in plans built for a Monday.
+5. **Add a second pet and a clash.** Add `Pickle` the cat with `Thyroid meds`
+   (5 min, high) pinned to `08:15` — inside Mochi's 08:00–08:30 walk.
+6. **Generate the schedule.** Press **Generate schedule**. You get a conflict
+   warning, then the plan.
+7. **Complete a task.** Press **Done** on `Breakfast`. It strikes through, and
+   a green banner reports that Breakfast is back on tomorrow's list — the
+   recurrence has already been queued.
+
+### What the scheduler shows you
+
+- **Conflict warnings, with the decision.** The 08:00 walk and the 08:15
+  medication cannot both happen. PawPal+ shows
+  `'Morning walk' for Mochi (08:00-08:30) overlaps 'Thyroid meds' for Pickle
+  (08:15-08:20) - you cannot be in two places at once`, followed by
+  *"PawPal+ will keep Morning walk and skip Thyroid meds. Change one of the two
+  fixed times above if that is the wrong call."* Only you can move a fixed
+  time, so the app reports rather than guesses.
+- **Sorting.** The *Order by* control re-sorts your task list with
+  `Scheduler.sort_by_time()` (fixed times in clock order, flexible tasks last)
+  or `sort_by_priority()` (high first, shortest breaking ties).
+- **Filtering.** *Show: All / Pending / Done* calls
+  `Pet.filter_tasks(completed=...)`.
+- **Priority across pets.** Shrink your available minutes in the sidebar and
+  regenerate: high-priority tasks survive for *both* pets before either pet's
+  low-priority tasks get a slot.
+- **Recurrence.** Completed tasks queue their next occurrence — tomorrow for
+  daily, the same weekday next week for weekly — and the follow-up stays out of
+  today's plan.
+- **Explanations.** Each plan has an *Explain* expander with the full reasoning
+  from `Scheduler.explain()`, and a *Left out* expander naming everything that
+  did not fit and why.
+
+### Sample CLI output
+
+`python main.py` prints the same logic without the browser:
+
+```
+==============================================================
+        TODAY'S SCHEDULE - Monday, September 14, 2026         
+==============================================================
+Owner:      Jordan
+Time today: 90 min
+Prefers:    walk, play
+Pets:       Mochi (dog, Shiba Inu, 3y), Pickle (cat, Tabby, 7y)
+Conflicts:  none detected
+
+--------------------------------------------------------------
+MOCHI
+--------------------------------------------------------------
+  08:00-08:30  Morning walk     30 min
+               high     why: fixed 08:00 slot you asked for
+  08:30-08:40  Breakfast        10 min
+               high     why: high priority
+  18:00-18:25  Evening walk     25 min
+               medium   why: fixed 18:00 slot you asked for
+
+  3 tasks, 65 min of care
+
+  Left out:
+    - Brush coat      needs 20 min, only 10 min left of your 90
+    - Puzzle feeder   needs 15 min, only 10 min left of your 90
+
+--------------------------------------------------------------
+PICKLE
+--------------------------------------------------------------
+  08:40-08:50  Wet food         10 min
+               medium   why: medium priority
+  09:00-09:05  Thyroid meds      5 min
+               high     why: fixed 09:00 slot you asked for
+
+  2 tasks, 15 min of care
+
+  Left out:
+    - Wand play       needs 15 min, only 10 min left of your 90
+    - Clip nails      needs 25 min, only 10 min left of your 90
+
+--------------------------------------------------------------
+  5 tasks planned, 4 left out, 80/90 min used
+```
+
+The full four-section CLI output — sorting, filtering, recurrence and conflict
+detection — is in [Sample Output](#-sample-output) above.

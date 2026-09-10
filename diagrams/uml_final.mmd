@@ -1,0 +1,149 @@
+---
+title: PawPal+ final system architecture
+---
+classDiagram
+    %% Final design, Phase 6. Matches pawpal_system.py member for member.
+    %%
+    %% Changed from the Phase 1 draft:
+    %%   - Priority became an IntEnum so it sorts directly; Frequency added
+    %%   - ScheduledTask / SkippedTask / DailyPlan added, so a plan carries
+    %%     clock times, what was dropped, and the reason for each
+    %%   - Conflict added, so overlaps are reported instead of only avoided
+    %%   - Task gained due_date + recurrence, so completing one queues the next
+    %%   - Scheduler lost its own copy of the time budget and reads the Owner
+    %%
+    %% Dependencies point one way only: app.py (UI) and main.py (CLI) both
+    %% import this layer, and nothing here imports Streamlit. That is what lets
+    %% the same logic be driven from a browser, a terminal and the tests.
+
+    class Owner {
+        +str name
+        +int minutes_available
+        +list~str~ preferences
+        +list~Pet~ pets
+        +add_pet(pet) None
+        +remove_pet(pet_name) bool
+        +remove_pet_at(index) bool
+        +get_pet(pet_name) Pet
+        +all_tasks() list~Task~
+        +tasks_by_pet() dict
+        +filter_tasks(pet_name, completed, priority, frequency, due_on) list~Task~
+        +prefers(task) bool
+    }
+
+    class Pet {
+        +str name
+        +str species
+        +str breed
+        +int age_years
+        +list~Task~ tasks
+        +add_task(task) None
+        +remove_task(task_title) bool
+        +remove_task_at(index) bool
+        +get_task(task_title) Task
+        +pending_tasks() list~Task~
+        +completed_tasks() list~Task~
+        +tasks_due_on(day) list~Task~
+        +filter_tasks(completed, priority, frequency, due_on) list~Task~
+        +complete_task(task, today) Task
+        +uncomplete_task(task, today) bool
+        +minutes_needed_on(day) int
+    }
+
+    class Task {
+        +str title
+        +int duration_minutes
+        +Priority priority
+        +Frequency frequency
+        +int weekly_day
+        +time preferred_time
+        +date due_date
+        +bool completed
+        +timedelta duration
+        +bool is_anchored
+        +mark_complete() None
+        +mark_incomplete() None
+        +is_due_on(day) bool
+        +window_on(day) tuple
+        +next_due_date(after) date
+        +next_occurrence(after) Task
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+        +parse(value) Priority
+    }
+
+    class Frequency {
+        <<enumeration>>
+        DAILY
+        WEEKLY
+        +parse(value) Frequency
+    }
+
+    class Scheduler {
+        +time day_start
+        +time day_end
+        +build_plan(owner, pet, day) DailyPlan
+        +build_plans(owner, day) list~DailyPlan~
+        +sort_by_time(tasks) list~Task~
+        +sort_by_priority(tasks) list~Task~
+        +find_conflicts(owner, day) list~Conflict~
+        +conflict_warnings(owner, day) list~str~
+        +explain(plan) str
+    }
+
+    class DailyPlan {
+        +str pet_name
+        +date day
+        +list~ScheduledTask~ scheduled
+        +list~SkippedTask~ skipped
+        +int budget_minutes
+        +int minutes_used
+        +int minutes_remaining
+        +bool is_empty
+    }
+
+    class ScheduledTask {
+        +Task task
+        +time start_time
+        +str reason
+        +end_time() time
+    }
+
+    class SkippedTask {
+        +Task task
+        +str reason
+    }
+
+    class Conflict {
+        +str first_pet
+        +Task first
+        +str second_pet
+        +Task second
+        +date day
+        +str message
+    }
+
+    Owner "1" --> "*" Pet : owns
+    Pet "1" --> "*" Task : needs care
+    Task --> Priority : ranked by
+    Task --> Frequency : recurs by
+    Task ..> Task : next_occurrence() queues
+
+    Scheduler ..> Owner : reads budget and preferences
+    Scheduler ..> Pet : reads tasks due today
+    Scheduler ..> DailyPlan : produces one per pet
+    Scheduler ..> Conflict : reports overlaps
+
+    DailyPlan "1" --> "*" ScheduledTask : contains
+    DailyPlan "1" --> "*" SkippedTask : records
+    ScheduledTask --> Task : places at a time
+    SkippedTask --> Task : explains dropping
+    Conflict --> Task : names the clashing pair
+
+    note for Scheduler "Stateless apart from the day window.<br/>All pets share one timeline and one<br/>time budget, so nothing double-books<br/>the owner and priority is compared<br/>across the whole household."
+    note for Task "Every task recurs. Completing one<br/>queues its next occurrence rather<br/>than disappearing."
