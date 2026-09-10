@@ -204,13 +204,33 @@ pair and miss `Morning walk` vs `Eye drops`.
 
 ```bash
 # Run the full test suite:
-pytest
+python -m pytest
 
-# Run with coverage:
-pytest --cov
+# Run with coverage of the logic layer:
+python -m pytest --cov=pawpal_system --cov-report=term-missing
 ```
 
-Sample test output:
+**What the tests cover** — 84 tests in two files:
+
+`tests/test_pawpal.py` (72 tests) covers the logic layer:
+
+| Area | Examples |
+|------|----------|
+| Data model | Adding a task grows the list, `mark_complete()` flips status, completed tasks leave `pending_tasks()`, removal by title and by position, zero-duration tasks rejected |
+| Sorting | `sort_by_time()` returns fixed times in chronological order with unpinned tasks last and is stable; `sort_by_priority()` ranks by priority then duration; the finished plan itself reads top-to-bottom by clock |
+| Filtering | By completion status, pet name, priority, frequency and due date, and that combined criteria must *all* match |
+| Recurrence | Completing a daily task queues tomorrow; a weekly task queues the same weekday next week — even when completed late; the follow-up stays out of today's plan; an overdue task stays due; undo removes the follow-up |
+| Conflicts | Detected across pets and within one pet; back-to-back tasks do *not* conflict; every overlapping pair is reported, not just adjacent ones; completed and unpinned tasks never conflict; the plan still builds and skips the loser with a reason |
+| Scheduling | Priority order, the shared time budget, fixed-time anchors, gap-filling before an anchor, anchors outside the day window, preferences breaking ties, and priority compared *across* pets |
+| Edge cases | Pet with no tasks, owner with no pets, zero minutes available, a task longer than the day window, a task longer than the budget, two pets sharing a name, planning is side-effect free and deterministic |
+
+`tests/test_app.py` (12 tests) drives the real Streamlit script through
+`AppTest`, covering what the logic tests cannot: that a pet added in the browser
+survives a rerun, that duplicate task titles do not crash the page, that
+deleting a row and then toggling "Done" hits the right task, and that conflict
+warnings actually reach the screen.
+
+Test run:
 
 ```
 ============================= test session starts ==============================
@@ -218,10 +238,42 @@ platform darwin -- Python 3.13.9, pytest-8.4.2, pluggy-1.5.0
 rootdir: /Users/somamasiddiqui/Desktop/codepathAI/Assign3
 configfile: pytest.ini
 testpaths: tests
-collected 44 items
-tests/test_pawpal.py ............................................        [100%]
-============================== 44 passed in 0.03s ==============================
+collected 84 items
+tests/test_app.py ............                                           [ 14%]
+tests/test_pawpal.py ................................................... [ 75%]
+.....................                                                    [100%]
+============================== 84 passed in 1.33s ==============================
 ```
+
+Coverage of the logic layer:
+
+```
+_______________ coverage: platform darwin, python 3.13.9-final-0 _______________
+
+Name               Stmts   Miss  Cover   Missing
+------------------------------------------------
+pawpal_system.py     328      0   100%
+------------------------------------------------
+TOTAL                328      0   100%
+============================== 84 passed in 1.76s ==============================
+```
+
+**Confidence level: ★★★★☆ (4/5)**
+
+The logic layer is at 100% line coverage and every scheduling rule is pinned by
+at least one test, including the three bugs the Phase 2 demo exposed and the two
+the Phase 3 UI exposed. Writing the edge-case tests in Phase 5 found a real
+one too: `_pack()` keyed its plans dictionary by pet *name*, so two pets called
+"Mochi" were merged into a single plan and both were handed the same object —
+now keyed by identity.
+
+It is not 5 stars because line coverage is not behaviour coverage. The
+scheduler is greedy, and I have tested the rules it *has* rather than proven the
+plans it produces are the ones an owner would want — a plan that leaves 10
+minutes idle passes every test here. Untested: durations that are wrong in the
+real world (a "30 minute" walk that takes 45 silently breaks conflict
+detection), timezone and midnight-crossing behaviour, and anything about
+concurrent edits from two browser tabs.
 
 ## 📐 Smarter Scheduling
 

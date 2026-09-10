@@ -194,42 +194,60 @@ vet visit — has to be deleted after completion rather than simply finished. A
 
 **a. What you tested**
 
-21 tests in `tests/test_pawpal.py`, in four groups:
+84 tests across two files.
 
-- **The two required behaviors** — `mark_complete()` flips a task's status, and
-  adding a task grows the pet's task count.
-- **The data model** — completed tasks leave `pending_tasks()`, `remove_task()`
-  reports whether it removed anything, a zero-duration task is rejected, and
-  priority strings from the UI parse into the enum.
-- **Recurrence** — a weekly task is due on its weekday and not on others.
-- **Scheduling** — priority ordering, the time budget, fixed-time anchors,
-  gap-filling ahead of an anchor, an anchor outside the day window, completed
-  tasks not being rescheduled, and preferences breaking a tie.
+`tests/test_pawpal.py` (72 tests) covers the logic layer, grouped as: the two
+required behaviors (`mark_complete()` flips status, adding a task grows the
+count), the data model, sorting, filtering, recurrence, conflict detection,
+scheduling rules, and edge cases. `tests/test_app.py` (12 tests) drives the
+real Streamlit script through `AppTest`.
 
-The multi-pet tests matter most, because each one pins down a bug the demo
-actually exposed: `test_high_priority_task_beats_another_pets_low_priority_task`
-covers the priority inversion, `test_two_pets_tasks_never_overlap_on_the_clock`
-covers the double-booking, and `test_shared_budget_is_not_spent_twice` covers
-the budget. Those three would have caught all of it before I ran anything.
+The tests I value most are the ones that pin down a bug I actually hit:
+
+- `test_high_priority_task_beats_another_pets_low_priority_task` and
+  `test_two_pets_tasks_never_overlap_on_the_clock` — the priority inversion and
+  double-booking the Phase 2 CLI demo exposed.
+- `test_tasks_sharing_a_title_do_not_break_the_page` and
+  `test_toggling_done_after_a_delete_hits_the_right_task` — the two Phase 3 UI
+  bugs. Neither was reachable from the logic layer, which is why the UI needed
+  its own tests.
+- `test_conflict_sweep_reports_every_overlapping_pair` — guards against the
+  plausible-looking shortcut of comparing each task only to the next one after
+  sorting, which misses non-adjacent overlaps.
+- `test_two_pets_with_the_same_name_get_separate_plans` — this one *failed when
+  I wrote it*. See below.
 
 **b. Confidence**
 
-Reasonably confident about the rules I wrote, and less so about the ones I have
-not thought of. The tests cover each scheduling rule at least once, and the CLI
-demo exercises them together on a realistic eight-task day. Two of the three
-bugs I found in Phase 2 came from *running* the code rather than reading it,
-which is a fair warning that a passing suite is not proof.
+Four out of five. The logic layer is at 100% line coverage and every scheduling
+rule has at least one test.
 
-Edge cases I would test next:
+The Phase 5 edge-case pass earned that confidence by finding a real bug, not by
+confirming what I already believed. `Scheduler._pack()` built its plans
+dictionary keyed by `pet.name`, so an owner with two pets both called "Mochi"
+got their tasks merged into one `DailyPlan` — and `build_plans()` returned *the
+same object twice*. It is now keyed by object identity. I had listed duplicate
+pet names in this section as an edge case worth testing before I wrote the
+test, so the value was in following through on my own list rather than in the
+idea.
 
-- Two fixed-time tasks that want overlapping slots — the second is skipped, but
-  I would rather it slide to the next free slot than be dropped.
-- A task longer than the whole day window, or longer than the owner's budget.
-- A day with zero minutes available, and an owner with no pets.
-- Two pets with identical names, which `get_pet()` and the plan-grouping dict
-  would currently conflate.
-- Whether the greedy 10-minutes-idle case above is ever bad enough to be worth
-  a second pass over the skipped list.
+Where the honest doubt sits: line coverage is not behaviour coverage. Every
+test here checks that the scheduler follows the rules I gave it, not that those
+rules produce a day an owner would actually want. The greedy pass leaving 10
+minutes idle while a 15 minute task goes undone passes the whole suite.
+
+What I would test next, in order:
+
+- Durations that are wrong in the real world. Conflict detection trusts
+  `duration_minutes`, so a "30 minute" walk that really takes 45 silently
+  stops overlapping the 08:45 task it collides with. This is the gap most
+  likely to bite a real user.
+- Tasks near midnight, and a `day_end` earlier in the day than a task's
+  `preferred_time` plus its duration.
+- Whether a second pass over `DailyPlan.skipped` could fill leftover gaps
+  without breaking the priority guarantee.
+- Two browser tabs editing the same session, which the current
+  `st.session_state` design does not account for at all.
 
 ---
 

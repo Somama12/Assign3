@@ -585,3 +585,319 @@ def test_conflict_warnings_returns_strings_and_never_raises() -> None:
     assert len(warnings) == 1
     assert all(isinstance(w, str) for w in warnings)
     assert Scheduler().conflict_warnings(Owner("Nobody"), day=MONDAY) == []
+
+
+# --- Edge cases: empty and degenerate input ---------------------------------
+
+
+def test_pet_with_no_tasks_plans_cleanly(owner: Owner, pet: Pet) -> None:
+    """A pet with nothing to do produces an empty plan, not an error."""
+    plan = Scheduler().build_plan(owner, pet, day=MONDAY)
+
+    assert plan.is_empty
+    assert plan.skipped == []
+    assert plan.minutes_used == 0
+    assert plan.minutes_remaining == 90
+
+
+def test_owner_with_no_pets_plans_cleanly() -> None:
+    """An owner with no pets gets no plans and no crash."""
+    owner = Owner("Jordan", minutes_available=90)
+
+    assert Scheduler().build_plans(owner, day=MONDAY) == []
+    assert owner.all_tasks() == []
+    assert Scheduler().conflict_warnings(owner, day=MONDAY) == []
+
+
+def test_zero_minutes_available_skips_everything_with_a_reason(pet: Pet) -> None:
+    """With no time at all, every task is skipped and told why."""
+    owner = Owner("Jordan", minutes_available=0, pets=[pet])
+    pet.add_task(Task("Morning walk", 30, priority=Priority.HIGH))
+    pet.add_task(Task("Meds", 5, priority=Priority.HIGH, preferred_time=time(9, 0)))
+
+    plan = Scheduler().build_plan(owner, pet, day=MONDAY)
+
+    assert plan.is_empty
+    assert len(plan.skipped) == 2
+    assert all(item.reason for item in plan.skipped)
+
+
+def test_explain_handles_an_empty_plan(owner: Owner, pet: Pet) -> None:
+    """The explanation still reads sensibly when nothing was scheduled."""
+    scheduler = Scheduler()
+
+    text = scheduler.explain(scheduler.build_plan(owner, pet, day=MONDAY))
+
+    assert "Nothing scheduled" in text
+    assert pet.name in text
+
+
+# --- Edge cases: tasks that cannot fit --------------------------------------
+
+
+def test_task_longer_than_the_day_window_is_skipped(owner: Owner, pet: Pet) -> None:
+    """A task that cannot fit between day_start and day_end is left out."""
+    owner.minutes_available = 600
+    pet.add_task(Task("Marathon hike", 180, priority=Priority.HIGH))
+
+    plan = Scheduler(day_start=time(8, 0), day_end=time(10, 0)).build_plan(
+        owner, pet, day=MONDAY
+    )
+
+    assert plan.is_empty
+    assert "no open slot" in plan.skipped[0].reason
+
+
+def test_task_longer_than_the_budget_is_skipped(owner: Owner, pet: Pet) -> None:
+    """A task longer than the whole time budget can never be scheduled."""
+    owner.minutes_available = 20
+    pet.add_task(Task("Long groom", 60, priority=Priority.HIGH))
+
+    plan = Scheduler().build_plan(owner, pet, day=MONDAY)
+
+    assert plan.is_empty
+    assert "needs 60 min" in plan.skipped[0].reason
+
+
+def test_anchored_task_before_the_day_starts_is_skipped(owner: Owner, pet: Pet) -> None:
+    """A fixed time earlier than day_start is outside the planning window."""
+    pet.add_task(Task("Dawn walk", 20, preferred_time=time(5, 0)))
+
+    plan = Scheduler(day_start=time(8, 0)).build_plan(owner, pet, day=MONDAY)
+
+    assert plan.is_empty
+    assert "outside the" in plan.skipped[0].reason
+
+
+# --- Edge cases: identical names --------------------------------------------
+
+
+def test_two_pets_with_the_same_name_get_separate_plans() -> None:
+    """Two pets sharing a name must not have their plans merged."""
+    first = Pet("Mochi", "dog")
+    first.add_task(Task("Walk", 30, priority=Priority.HIGH))
+    second = Pet("Mochi", "cat")
+    second.add_task(Task("Wet food", 10, priority=Priority.HIGH))
+    owner = Owner("Jordan", minutes_available=90, pets=[first, second])
+
+    plans = Scheduler().build_plans(owner, day=MONDAY)
+
+    assert len(plans) == 2
+    assert [i.task.title for i in plans[0].scheduled] == ["Walk"]
+    assert [i.task.title for i in plans[1].scheduled] == ["Wet food"]
+
+
+# --- Plan guarantees --------------------------------------------------------
+
+
+def test_plan_is_returned_in_chronological_order(owner: Owner, pet: Pet) -> None:
+    """Whatever the input order, the plan reads top to bottom by clock time."""
+    pet.add_task(Task("Evening walk", 20, preferred_time=time(18, 0)))
+    pet.add_task(Task("Breakfast", 10, priority=Priority.HIGH))
+    pet.add_task(Task("Lunch meds", 5, priority=Priority.HIGH, preferred_time=time(12, 0)))
+
+    plan = Scheduler(day_start=time(8, 0)).build_plan(owner, pet, day=MONDAY)
+    starts = [item.start_time for item in plan.scheduled]
+
+    assert len(starts) == 3
+    assert starts == sorted(starts)
+
+
+def test_scheduled_windows_never_overlap_within_one_pet(owner: Owner, pet: Pet) -> None:
+    """Back-to-back placement leaves no double-booked minute."""
+    for index in range(5):
+        pet.add_task(Task(f"Task {index}", 10, priority=Priority.MEDIUM))
+
+    plan = Scheduler(day_start=time(8, 0)).build_plan(owner, pet, day=MONDAY)
+    windows = [(i.start_time, i.end_time()) for i in plan.scheduled]
+
+    assert len(windows) == 5
+    for (_, earlier_end), (later_start, _) in zip(windows, windows[1:]):
+        assert earlier_end <= later_start
+
+
+def test_building_a_plan_does_not_mutate_the_tasks(owner: Owner, pet: Pet) -> None:
+    """Planning is read-only: it never completes or reorders the source list."""
+    pet.add_task(Task("Morning walk", 30, priority=Priority.HIGH))
+    pet.add_task(Task("Breakfast", 10, priority=Priority.LOW))
+    before = [(t.title, t.completed) for t in pet.tasks]
+
+    Scheduler().build_plan(owner, pet, day=MONDAY)
+
+    assert [(t.title, t.completed) for t in pet.tasks] == before
+
+
+def test_planning_twice_gives_the_same_answer(owner: Owner, pet: Pet) -> None:
+    """The scheduler is deterministic, so the owner sees a stable plan."""
+    pet.add_task(Task("Morning walk", 30, priority=Priority.HIGH))
+    pet.add_task(Task("Wand play", 15, priority=Priority.LOW))
+    pet.add_task(Task("Meds", 5, priority=Priority.HIGH, preferred_time=time(9, 0)))
+    scheduler = Scheduler()
+
+    first = scheduler.build_plan(owner, pet, day=MONDAY)
+    second = scheduler.build_plan(owner, pet, day=MONDAY)
+
+    assert [(i.task.title, i.start_time) for i in first.scheduled] == [
+        (i.task.title, i.start_time) for i in second.scheduled
+    ]
+
+
+# --- Validation -------------------------------------------------------------
+
+
+def test_scheduler_rejects_a_backwards_day() -> None:
+    """A day that ends before it starts is not a usable window."""
+    with pytest.raises(ValueError, match="later than day_start"):
+        Scheduler(day_start=time(20, 0), day_end=time(8, 0))
+
+
+def test_weekly_day_out_of_range_is_rejected() -> None:
+    """weekly_day has to name a real weekday."""
+    with pytest.raises(ValueError, match="weekly_day"):
+        Task("Brush coat", 20, frequency=Frequency.WEEKLY, weekly_day=9)
+
+
+def test_frequency_accepts_ui_strings_and_rejects_junk() -> None:
+    """Frequency parses UI strings and refuses anything else."""
+    assert Task("Walk", 30, frequency="Weekly").frequency is Frequency.WEEKLY
+
+    with pytest.raises(ValueError, match="unknown frequency"):
+        Task("Walk", 30, frequency="fortnightly")
+
+
+def test_priority_parses_ints_and_enum_members() -> None:
+    """Priority.parse() is tolerant of every form the app might hand it."""
+    assert Priority.parse(3) is Priority.HIGH
+    assert Priority.parse("LOW") is Priority.LOW
+    assert Priority.parse(Priority.MEDIUM) is Priority.MEDIUM
+
+
+# --- Conflict resolution inside the plan ------------------------------------
+
+
+def test_plan_skips_the_second_task_wanting_a_taken_slot() -> None:
+    """Two tasks pinned to the same time: the first keeps it, the second is told why."""
+    mochi = Pet("Mochi", "dog")
+    mochi.add_task(Task("Morning walk", 30, priority=Priority.HIGH, preferred_time=time(8, 0)))
+    pickle = Pet("Pickle", "cat")
+    pickle.add_task(Task("Insulin", 10, priority=Priority.HIGH, preferred_time=time(8, 15)))
+    owner = Owner("Jordan", minutes_available=90, pets=[mochi, pickle])
+
+    mochi_plan, pickle_plan = Scheduler(day_start=time(8, 0)).build_plans(owner, day=MONDAY)
+
+    assert [i.task.title for i in mochi_plan.scheduled] == ["Morning walk"]
+    assert pickle_plan.is_empty
+    assert pickle_plan.skipped[0].reason == "its preferred time overlaps an earlier task"
+
+
+def test_a_clashing_task_is_reported_and_skipped_consistently() -> None:
+    """find_conflicts() warns about exactly what the plan then leaves out."""
+    pet = Pet("Mochi", "dog")
+    pet.add_task(Task("Walk", 30, preferred_time=time(8, 0)))
+    pet.add_task(Task("Bath", 20, preferred_time=time(8, 10)))
+    owner = Owner("Jordan", minutes_available=90, pets=[pet])
+    scheduler = Scheduler(day_start=time(8, 0))
+
+    warnings = scheduler.conflict_warnings(owner, day=MONDAY)
+    plan = scheduler.build_plan(owner, pet, day=MONDAY)
+
+    assert len(warnings) == 1
+    assert [i.task.title for i in plan.skipped] == ["Bath"]
+
+
+# --- Lookup and bookkeeping helpers -----------------------------------------
+
+
+def test_owner_remove_pet_by_name() -> None:
+    """remove_pet() drops a named pet and reports whether it found one."""
+    owner = Owner("Jordan", pets=[Pet("Mochi", "dog"), Pet("Pickle", "cat")])
+
+    assert owner.remove_pet("Mochi") is True
+    assert [p.name for p in owner.pets] == ["Pickle"]
+    assert owner.remove_pet("Mochi") is False
+
+
+def test_owner_get_pet_finds_or_returns_none(owner: Owner) -> None:
+    """get_pet() returns the pet or None, never raises."""
+    assert owner.get_pet("Mochi").species == "dog"
+    assert owner.get_pet("Nobody") is None
+
+
+def test_pet_get_task_finds_or_returns_none(pet: Pet) -> None:
+    """get_task() returns the task or None, never raises."""
+    pet.add_task(Task("Morning walk", 30))
+
+    assert pet.get_task("Morning walk").duration_minutes == 30
+    assert pet.get_task("Nap") is None
+
+
+def test_filter_tasks_by_due_date(pet: Pet) -> None:
+    """filter_tasks(due_on=...) respects frequency and due dates together."""
+    pet.add_task(Task("Morning walk", 30))
+    pet.add_task(Task("Brush coat", 20, frequency=Frequency.WEEKLY, weekly_day=0))
+
+    assert len(pet.filter_tasks(due_on=MONDAY)) == 2
+    assert [t.title for t in pet.filter_tasks(due_on=TUESDAY)] == ["Morning walk"]
+
+
+def test_minutes_needed_on_totals_the_days_work(pet: Pet) -> None:
+    """minutes_needed_on() adds up what the day would take if nothing were cut."""
+    pet.add_task(Task("Morning walk", 30))
+    pet.add_task(Task("Breakfast", 10))
+    pet.add_task(Task("Brush coat", 20, frequency=Frequency.WEEKLY, weekly_day=0))
+
+    assert pet.minutes_needed_on(MONDAY) == 60
+    assert pet.minutes_needed_on(TUESDAY) == 40
+
+
+def test_uncomplete_task_rejects_a_task_from_another_pet(pet: Pet) -> None:
+    """uncomplete_task() only touches tasks it owns."""
+    stranger = Task("Someone else's walk", 30)
+    stranger.mark_complete()
+
+    assert pet.uncomplete_task(stranger, today=MONDAY) is False
+    assert stranger.completed is True
+
+
+# --- Display formats the user actually reads --------------------------------
+
+
+def test_pet_description_includes_the_details_that_are_set() -> None:
+    """Pet.__str__ lists species, breed and age, skipping what is blank."""
+    assert str(Pet("Mochi", "dog", "Shiba Inu", 3)) == "Mochi (dog, Shiba Inu, 3y)"
+    assert str(Pet("Pickle", "cat")) == "Pickle (cat)"
+
+
+def test_task_description_shows_priority_as_a_word_and_the_due_date() -> None:
+    """Priority renders as a name, not the IntEnum's number."""
+    task = Task("Morning walk", 30, priority=Priority.HIGH)
+    assert str(task) == "Morning walk (30 min, high)"
+    assert f"{task.priority}" == "high"
+
+    dated = Task("Breakfast", 10, due_date=MONDAY)
+    assert str(dated) == "Breakfast (10 min, medium, due Mon Sep 14)"
+
+
+def test_conflict_message_names_both_pets_and_windows() -> None:
+    """A cross-pet conflict message spells out who clashes with whom, and when."""
+    walk = Task("Walk", 30, preferred_time=time(8, 0))
+    shot = Task("Insulin", 10, preferred_time=time(8, 15))
+    conflict = Conflict("Mochi", walk, "Pickle", shot, MONDAY)
+
+    assert "08:00-08:30" in conflict.message
+    assert "08:15-08:25" in conflict.message
+    assert "Mochi" in conflict.message and "Pickle" in conflict.message
+    assert str(conflict) == conflict.message
+
+
+def test_owner_and_frequency_render_for_display() -> None:
+    """The remaining display helpers used by the CLI header and task rows."""
+    owner = Owner("Jordan", minutes_available=90, pets=[Pet("Mochi", "dog")])
+    assert str(owner) == "Jordan (90 min today, 1 pet)"
+    assert str(Owner("Sam", 60)) == "Sam (60 min today, 0 pets)"
+
+    assert str(Frequency.DAILY) == "daily"
+    assert f"{Frequency.WEEKLY}" == "weekly"
+
+    # Priority still formats as a number when a numeric spec is asked for.
+    assert f"{Priority.HIGH:d}" == "3"

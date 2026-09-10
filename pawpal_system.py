@@ -476,10 +476,13 @@ class Scheduler:
     ) -> list[DailyPlan]:
         """Fit the candidate (pet, task) pairs into the day, then group by pet."""
         budget = owner.minutes_available
-        plans = {
-            pet.name: DailyPlan(pet_name=pet.name, day=day, budget_minutes=budget)
-            for pet in pets
-        }
+        # Keyed by object identity, not by name: two pets can share a name, and
+        # keying on it would merge their plans into one and hand both pets the
+        # same object.
+        plans = [
+            DailyPlan(pet_name=pet.name, day=day, budget_minutes=budget) for pet in pets
+        ]
+        plan_for = {id(pet): plan for pet, plan in zip(pets, plans)}
         busy: list[tuple[datetime, datetime]] = []
         used = 0
 
@@ -497,7 +500,7 @@ class Scheduler:
         )
 
         for pet, task in anchored:
-            plan = plans[pet.name]
+            plan = plan_for[id(pet)]
             start = datetime.combine(day, task.preferred_time)
             end = start + task.duration
             if used + task.duration_minutes > budget:
@@ -530,7 +533,7 @@ class Scheduler:
                 )
 
         for pet, task in flexible:
-            plan = plans[pet.name]
+            plan = plan_for[id(pet)]
             if used + task.duration_minutes > budget:
                 plan.skipped.append(
                     SkippedTask(task, self._budget_reason(task, budget, used))
@@ -548,9 +551,9 @@ class Scheduler:
                 ScheduledTask(task, start.time(), self._fit_reason(owner, task))
             )
 
-        for plan in plans.values():
+        for plan in plans:
             plan.scheduled.sort(key=lambda item: item.start_time)
-        return [plans[pet.name] for pet in pets]
+        return plans
 
     def _first_open_slot(
         self, day: date, busy: list[tuple[datetime, datetime]], duration: timedelta
