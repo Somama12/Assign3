@@ -5,6 +5,16 @@ body is a stub so the shape of the system can be reviewed before implementation.
 """
 
 from dataclasses import dataclass, field
+from datetime import time
+from enum import IntEnum
+
+
+class Priority(IntEnum):
+    """How important a task is. Higher value sorts first."""
+
+    LOW = 1
+    MEDIUM = 2
+    HIGH = 3
 
 
 @dataclass
@@ -13,15 +23,11 @@ class Task:
 
     title: str
     duration_minutes: int
-    priority: str = "medium"
+    priority: Priority = Priority.MEDIUM
     completed: bool = False
 
     def mark_complete(self) -> None:
         """Flag this task as done for the day."""
-        raise NotImplementedError
-
-    def priority_rank(self) -> int:
-        """Return a sortable number so high priority tasks come first."""
         raise NotImplementedError
 
 
@@ -70,16 +76,46 @@ class Owner:
         raise NotImplementedError
 
 
-class Scheduler:
-    """Turns a pet's pending tasks into a plan that fits the owner's day."""
+@dataclass
+class ScheduledTask:
+    """A task that made the cut, pinned to a clock time."""
 
-    def __init__(self, minutes_available: int) -> None:
-        self.minutes_available = minutes_available
+    task: Task
+    start_time: time
 
-    def build_plan(self, pet: Pet) -> list[Task]:
-        """Choose and order tasks for the day within the time budget."""
+    def end_time(self) -> time:
+        """When this task finishes, based on its duration."""
         raise NotImplementedError
 
-    def explain_plan(self, plan: list[Task]) -> str:
+
+@dataclass
+class DailyPlan:
+    """The scheduler's answer for one pet: what happens, and what didn't fit."""
+
+    pet_name: str
+    scheduled: list[ScheduledTask] = field(default_factory=list)
+    skipped: list[Task] = field(default_factory=list)
+    minutes_used: int = 0
+
+    def minutes_remaining(self, budget: int) -> int:
+        """How much of the owner's time budget this plan leaves unused."""
+        raise NotImplementedError
+
+
+class Scheduler:
+    """Turns pending tasks into a plan that fits the owner's day."""
+
+    def __init__(self, day_start: time = time(8, 0)) -> None:
+        self.day_start = day_start
+
+    def build_plan(self, owner: Owner, pet: Pet) -> DailyPlan:
+        """Choose and order one pet's tasks within the owner's time budget."""
+        raise NotImplementedError
+
+    def build_plans(self, owner: Owner) -> list[DailyPlan]:
+        """Plan every pet the owner has, sharing the one time budget."""
+        raise NotImplementedError
+
+    def explain(self, plan: DailyPlan) -> str:
         """Describe in plain language why the plan looks the way it does."""
         raise NotImplementedError

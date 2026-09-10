@@ -1,5 +1,7 @@
 classDiagram
-    %% PawPal+ initial design (Phase 1 draft)
+    %% PawPal+ system design (Phase 1)
+    %% Revised after reviewing the skeleton: added Priority, ScheduledTask and
+    %% DailyPlan so a plan can carry times, skipped tasks and its explanation.
 
     class Owner {
         +str name
@@ -25,19 +27,45 @@ classDiagram
     class Task {
         +str title
         +int duration_minutes
-        +str priority
+        +Priority priority
         +bool completed
         +mark_complete() None
-        +priority_rank() int
+    }
+
+    class Priority {
+        <<enumeration>>
+        LOW
+        MEDIUM
+        HIGH
+    }
+
+    class ScheduledTask {
+        +Task task
+        +time start_time
+        +time end_time()
+    }
+
+    class DailyPlan {
+        +str pet_name
+        +list~ScheduledTask~ scheduled
+        +list~Task~ skipped
+        +int minutes_used
+        +minutes_remaining(budget) int
     }
 
     class Scheduler {
-        +int minutes_available
-        +build_plan(pet) list~Task~
-        +explain_plan(plan) str
+        +time day_start
+        +build_plan(owner, pet) DailyPlan
+        +build_plans(owner) list~DailyPlan~
+        +explain(plan) str
     }
 
     Owner "1" --> "*" Pet : owns
-    Pet "1" --> "*" Task : has care
-    Scheduler ..> Pet : reads tasks from
+    Pet "1" --> "*" Task : needs care
+    Task --> Priority : ranked by
+    ScheduledTask --> Task : places
+    DailyPlan "1" --> "*" ScheduledTask : contains
+    DailyPlan ..> Task : lists skipped
     Scheduler ..> Owner : reads constraints from
+    Scheduler ..> Pet : reads tasks from
+    Scheduler ..> DailyPlan : produces
