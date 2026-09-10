@@ -1,7 +1,5 @@
 classDiagram
-    %% PawPal+ system design (Phase 1)
-    %% Revised after reviewing the skeleton: added Priority, ScheduledTask and
-    %% DailyPlan so a plan can carry times, skipped tasks and its explanation.
+    %% PawPal+ system design, kept in sync with pawpal_system.py.
 
     class Owner {
         +str name
@@ -11,6 +9,9 @@ classDiagram
         +add_pet(pet) None
         +remove_pet(pet_name) bool
         +get_pet(pet_name) Pet
+        +all_tasks() list~Task~
+        +tasks_by_pet() dict
+        +prefers(task) bool
     }
 
     class Pet {
@@ -21,15 +22,26 @@ classDiagram
         +list~Task~ tasks
         +add_task(task) None
         +remove_task(task_title) bool
+        +get_task(task_title) Task
         +pending_tasks() list~Task~
+        +completed_tasks() list~Task~
+        +tasks_due_on(day) list~Task~
+        +minutes_needed_on(day) int
     }
 
     class Task {
         +str title
         +int duration_minutes
         +Priority priority
+        +Frequency frequency
+        +int weekly_day
+        +time preferred_time
         +bool completed
+        +timedelta duration
+        +bool is_anchored
         +mark_complete() None
+        +mark_incomplete() None
+        +is_due_on(day) bool
     }
 
     class Priority {
@@ -37,35 +49,57 @@ classDiagram
         LOW
         MEDIUM
         HIGH
+        +parse(value) Priority
+    }
+
+    class Frequency {
+        <<enumeration>>
+        DAILY
+        WEEKLY
+        +parse(value) Frequency
     }
 
     class ScheduledTask {
         +Task task
         +time start_time
-        +time end_time()
+        +str reason
+        +end_time() time
+    }
+
+    class SkippedTask {
+        +Task task
+        +str reason
     }
 
     class DailyPlan {
         +str pet_name
+        +date day
         +list~ScheduledTask~ scheduled
-        +list~Task~ skipped
+        +list~SkippedTask~ skipped
+        +int budget_minutes
         +int minutes_used
-        +minutes_remaining(budget) int
+        +int minutes_remaining
+        +bool is_empty
     }
 
     class Scheduler {
         +time day_start
-        +build_plan(owner, pet) DailyPlan
-        +build_plans(owner) list~DailyPlan~
+        +time day_end
+        +build_plan(owner, pet, day) DailyPlan
+        +build_plans(owner, day) list~DailyPlan~
         +explain(plan) str
+        -_pack(owner, day, candidates, pets) list~DailyPlan~
+        -_first_open_slot(day, busy, duration) datetime
     }
 
     Owner "1" --> "*" Pet : owns
     Pet "1" --> "*" Task : needs care
     Task --> Priority : ranked by
+    Task --> Frequency : recurs by
     ScheduledTask --> Task : places
+    SkippedTask --> Task : explains dropping
     DailyPlan "1" --> "*" ScheduledTask : contains
-    DailyPlan ..> Task : lists skipped
+    DailyPlan "1" --> "*" SkippedTask : records
     Scheduler ..> Owner : reads constraints from
-    Scheduler ..> Pet : reads tasks from
-    Scheduler ..> DailyPlan : produces
+    Scheduler ..> Pet : reads due tasks from
+    Scheduler ..> DailyPlan : produces one per pet

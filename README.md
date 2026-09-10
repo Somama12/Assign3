@@ -44,15 +44,57 @@ pip install -r requirements.txt
 
 ## 🖥️ Sample Output
 
-Paste a sample of your app's CLI or Streamlit output here so a reader can see what a generated plan looks like:
+Output of `python main.py` — Jordan has 90 minutes, two pets, and eight tasks
+between them, so the scheduler has to leave some out:
 
 ```
-# e.g.:
-# Daily plan for Biscuit (Golden Retriever):
-#   08:00 — Morning walk (30 min) [priority: high]
-#   09:00 — Feeding (10 min) [priority: high]
-#   ...
+==============================================================
+        TODAY'S SCHEDULE - Monday, September 14, 2026
+==============================================================
+Owner:      Jordan
+Time today: 90 min
+Prefers:    walk, play
+Pets:       Mochi (dog, Shiba Inu, 3y), Pickle (cat, Tabby, 7y)
+
+--------------------------------------------------------------
+MOCHI
+--------------------------------------------------------------
+  08:00-08:30  Morning walk     30 min
+               high     why: fixed 08:00 slot you asked for
+  08:30-08:40  Breakfast        10 min
+               high     why: high priority
+  09:05-09:25  Brush coat       20 min
+               medium   why: medium priority
+
+  3 tasks, 60 min of care
+
+  Left out:
+    - Puzzle feeder   your 90 min for the day was already full
+
+--------------------------------------------------------------
+PICKLE
+--------------------------------------------------------------
+  08:40-08:50  Wet food         10 min
+               medium   why: medium priority
+  09:00-09:05  Thyroid meds      5 min
+               high     why: fixed 09:00 slot you asked for
+  09:25-09:40  Wand play        15 min
+               low      why: low priority, and matches your preferences
+
+  3 tasks, 30 min of care
+
+  Left out:
+    - Clip nails      your 90 min for the day was already full
+
+==============================================================
+  6 tasks planned, 2 left out, 90/90 min used
+==============================================================
 ```
+
+Things to notice: both pets are planned against **one** clock, so no two tasks
+overlap even across pets; `Brush coat` is weekly and only appears because the
+demo day is a Monday; `Wand play` beat `Clip nails` at equal priority because
+Jordan's preferences mention "play".
 
 ## 🧪 Testing PawPal+
 
@@ -67,19 +109,28 @@ pytest --cov
 Sample test output:
 
 ```
-# Paste your pytest output here
+============================= test session starts ==============================
+platform darwin -- Python 3.13.9, pytest-8.4.2, pluggy-1.5.0
+rootdir: /Users/somamasiddiqui/Desktop/codepathAI/Assign3
+configfile: pytest.ini
+testpaths: tests
+collected 21 items
+
+tests/test_pawpal.py .....................                               [100%]
+
+============================== 21 passed in 0.02s ==============================
 ```
 
 ## 📐 Smarter Scheduling
 
-> Fill in once you've implemented scheduling logic.
-
 | Feature | Method(s) | Notes |
 |---------|-----------|-------|
-| Task sorting | | e.g., by priority, duration |
-| Filtering | | e.g., skip tasks if time runs out |
-| Conflict handling | | e.g., overlapping time slots |
-| Recurring tasks | | e.g., daily vs. weekly |
+| Task sorting | `Scheduler._pack` | Fixed-time tasks placed first, then the rest by priority desc, owner preference, then shortest duration |
+| Filtering | `Pet.tasks_due_on`, `Task.is_due_on` | Only pending tasks due on the planning day are candidates |
+| Conflict handling | `Scheduler._first_open_slot` | One shared timeline for all pets, so nothing overlaps; a fixed-time task landing on a taken slot is skipped with a reason |
+| Recurring tasks | `Task.frequency`, `Task.weekly_day` | `daily` is always due; `weekly` is due only on its weekday |
+| Time budget | `Owner.minutes_available`, `DailyPlan.minutes_used` | One shared pool across all pets; anything that doesn't fit lands in `DailyPlan.skipped` with a reason |
+| Explanation | `Scheduler.explain`, `ScheduledTask.reason` | Every scheduled and skipped task carries the reason it got that treatment |
 
 ## 📸 Demo Walkthrough
 

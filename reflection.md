@@ -55,11 +55,38 @@ logic bottlenecks. Four changes came out of that review:
    supported path. `build_plans()` plans every pet against the single shared
    time budget.
 
-One suggestion I did not take was adding a `recurrence` field to `Task` for
-daily vs weekly tasks. It is a genuine feature, but nothing in the current
-scheduling design reads it yet, and an unused field in a skeleton is
-speculative complexity. I left it out until the scheduling logic exists to use
-it.
+One suggestion I did not take at the skeleton stage was adding a `recurrence`
+field to `Task` for daily vs weekly tasks. It is a genuine feature, but nothing
+in the skeleton read it yet, and an unused field is speculative complexity.
+Phase 2 then specified frequency as part of `Task`, so it went in as a
+`Frequency` enum plus a `weekly_day` — at that point there was real logic
+(`Task.is_due_on`) to consume it.
+
+Three more changes came out of actually running the code, not from reading it:
+
+5. **The `Priority` IntEnum printed as a number.** `Task.__str__` used an
+   f-string, and f-strings call `__format__`, which `IntEnum` inherits from
+   `int` — so my `__str__` was ignored and the demo printed
+   "Morning walk (30 min, 2)". Overriding `Priority.__format__` fixed every
+   call site at once. This is the change I would not have found by inspection;
+   I only saw it because the CLI output looked wrong.
+6. **Planning pet-by-pet inverted priority across pets.** `build_plans()`
+   originally looped over pets, each drawing from the remaining budget. The
+   first demo run scheduled Pickle's *nail clipping* (low) and left Mochi's
+   *breakfast* (high) unfed, because the first pet's low-priority tasks
+   consumed the budget before the second pet's high-priority tasks were even
+   considered. In Phase 1 I had flagged budget-splitting as an open question;
+   the demo answered it.
+7. **Per-pet plans overlapped on the wall clock.** Each pet got its own busy
+   list, so Mochi's 08:00-08:30 walk and Pickle's 08:00-08:10 feeding were both
+   "scheduled" at 08:00. Jordan has one pair of hands.
+
+Changes 6 and 7 share one fix: `Scheduler._pack()` now packs *all* pets'
+candidate tasks against a single shared timeline and a single shared budget,
+then groups the results into one `DailyPlan` per pet. Priority is therefore
+compared across the whole household. I also added `SkippedTask` so each
+dropped task carries the reason it was dropped, which is what makes
+`explain()` able to justify itself.
 
 ---
 
@@ -67,13 +94,46 @@ it.
 
 **a. Constraints and priorities**
 
-- What constraints does your scheduler consider (for example: time, priority, preferences)?
-- How did you decide which constraints mattered most?
+The scheduler weighs five constraints:
+
+1. **Due today** (`Task.is_due_on`) — daily tasks always count; weekly tasks
+   only on their weekday. Completed tasks drop out entirely.
+2. **Fixed times** (`Task.preferred_time`) — medication at 09:00 cannot float.
+3. **Priority** (`Priority`) — the main ordering signal for everything else.
+4. **Total time available** (`Owner.minutes_available`) — one shared pool for
+   the whole household.
+5. **Owner preferences** (`Owner.preferences`) — a keyword match against the
+   task title.
+
+I ranked them by what breaks if they are violated. Getting a fixed-time task
+wrong can mean a missed dose, so those are placed first and never moved.
+Priority comes next because it is the owner's own statement of what matters.
+Preferences rank last: they only break ties between tasks of equal priority,
+because a preference for walks should not outrank the cat's thyroid meds.
+Duration is a tiebreak below that — among otherwise equal tasks the shorter one
+goes first, which gets more tasks done inside the same budget.
 
 **b. Tradeoffs**
 
-- Describe one tradeoff your scheduler makes.
-- Why is that tradeoff reasonable for this scenario?
+The scheduler is **greedy, not optimal**. It walks the sorted task list once
+and takes the first slot that fits, and it never backtracks. So a 30 minute
+high-priority task will be scheduled even when two 15 minute medium tasks in
+that slot would have completed more of the list, and with 40 minutes free it
+will take a 30 minute task and then reject a 25 minute one, leaving 10 minutes
+idle. A packing algorithm would fill the day more tightly.
+
+That is the right tradeoff here. Optimal packing would sometimes drop a
+high-priority task in order to fit more low-priority ones — which is exactly
+backwards for pet care, where "the dog got walked" beats "more boxes ticked".
+The greedy pass is also explainable: every task carries one sentence saying
+why it landed where it did, and "highest priority first, then earliest open
+slot" is a rule an owner can predict. An optimizer's output is much harder to
+justify, and the README asks the app to explain its reasoning.
+
+A second, smaller tradeoff: pets share one timeline, so tasks that could
+genuinely happen at once (feeding two pets in the same kitchen) are serialized.
+That is pessimistic, but it is the safe direction to be wrong in — it never
+promises the owner they can be in two places at once.
 
 ---
 
@@ -95,13 +155,42 @@ it.
 
 **a. What you tested**
 
-- What behaviors did you test?
-- Why were these tests important?
+21 tests in `tests/test_pawpal.py`, in four groups:
+
+- **The two required behaviors** — `mark_complete()` flips a task's status, and
+  adding a task grows the pet's task count.
+- **The data model** — completed tasks leave `pending_tasks()`, `remove_task()`
+  reports whether it removed anything, a zero-duration task is rejected, and
+  priority strings from the UI parse into the enum.
+- **Recurrence** — a weekly task is due on its weekday and not on others.
+- **Scheduling** — priority ordering, the time budget, fixed-time anchors,
+  gap-filling ahead of an anchor, an anchor outside the day window, completed
+  tasks not being rescheduled, and preferences breaking a tie.
+
+The multi-pet tests matter most, because each one pins down a bug the demo
+actually exposed: `test_high_priority_task_beats_another_pets_low_priority_task`
+covers the priority inversion, `test_two_pets_tasks_never_overlap_on_the_clock`
+covers the double-booking, and `test_shared_budget_is_not_spent_twice` covers
+the budget. Those three would have caught all of it before I ran anything.
 
 **b. Confidence**
 
-- How confident are you that your scheduler works correctly?
-- What edge cases would you test next if you had more time?
+Reasonably confident about the rules I wrote, and less so about the ones I have
+not thought of. The tests cover each scheduling rule at least once, and the CLI
+demo exercises them together on a realistic eight-task day. Two of the three
+bugs I found in Phase 2 came from *running* the code rather than reading it,
+which is a fair warning that a passing suite is not proof.
+
+Edge cases I would test next:
+
+- Two fixed-time tasks that want overlapping slots — the second is skipped, but
+  I would rather it slide to the next free slot than be dropped.
+- A task longer than the whole day window, or longer than the owner's budget.
+- A day with zero minutes available, and an owner with no pets.
+- Two pets with identical names, which `get_pet()` and the plan-grouping dict
+  would currently conflate.
+- Whether the greedy 10-minutes-idle case above is ever bad enough to be worth
+  a second pass over the skipped list.
 
 ---
 
