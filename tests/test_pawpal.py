@@ -79,6 +79,27 @@ def test_remove_task_reports_whether_it_removed_anything(pet: Pet) -> None:
     assert pet.tasks == []
 
 
+def test_remove_task_at_targets_one_of_two_same_titled_tasks(pet: Pet) -> None:
+    """Position-based removal distinguishes tasks that share a title."""
+    pet.add_task(Task("Walk", duration_minutes=20))
+    pet.add_task(Task("Walk", duration_minutes=45))
+
+    assert pet.remove_task_at(0) is True
+
+    assert [t.duration_minutes for t in pet.tasks] == [45]
+    assert pet.remove_task_at(5) is False
+
+
+def test_remove_pet_at_targets_by_position() -> None:
+    """Position-based pet removal works even if two pets share a name."""
+    owner = Owner("Jordan", pets=[Pet("Mochi", "dog"), Pet("Mochi", "cat")])
+
+    assert owner.remove_pet_at(0) is True
+
+    assert [p.species for p in owner.pets] == ["cat"]
+    assert owner.remove_pet_at(3) is False
+
+
 def test_zero_duration_task_is_rejected() -> None:
     """A task has to take some time, or scheduling it is meaningless."""
     with pytest.raises(ValueError, match="must be positive"):

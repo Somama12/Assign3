@@ -142,6 +142,13 @@ class Pet:
                 return True
         return False
 
+    def remove_task_at(self, index: int) -> bool:
+        """Drop the task at this position. True if the index existed."""
+        if 0 <= index < len(self.tasks):
+            del self.tasks[index]
+            return True
+        return False
+
     def get_task(self, task_title: str) -> Task | None:
         """Look up one of this pet's tasks by title."""
         return next((t for t in self.tasks if t.title == task_title), None)
@@ -191,6 +198,13 @@ class Owner:
             if pet.name == pet_name:
                 del self.pets[index]
                 return True
+        return False
+
+    def remove_pet_at(self, index: int) -> bool:
+        """Drop the pet at this position. True if the index existed."""
+        if 0 <= index < len(self.pets):
+            del self.pets[index]
+            return True
         return False
 
     def get_pet(self, pet_name: str) -> Pet | None:

@@ -8,6 +8,7 @@ classDiagram
         +list~Pet~ pets
         +add_pet(pet) None
         +remove_pet(pet_name) bool
+        +remove_pet_at(index) bool
         +get_pet(pet_name) Pet
         +all_tasks() list~Task~
         +tasks_by_pet() dict
@@ -22,6 +23,7 @@ classDiagram
         +list~Task~ tasks
         +add_task(task) None
         +remove_task(task_title) bool
+        +remove_task_at(index) bool
         +get_task(task_title) Task
         +pending_tasks() list~Task~
         +completed_tasks() list~Task~
