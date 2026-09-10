@@ -135,6 +135,45 @@ genuinely happen at once (feeding two pets in the same kitchen) are serialized.
 That is pessimistic, but it is the safe direction to be wrong in — it never
 promises the owner they can be in two places at once.
 
+**Tradeoffs in the Phase 4 algorithms**
+
+*Conflict detection compares full time windows, not just start times.* The
+cheap version of this check is `task_a.preferred_time == task_b.preferred_time`,
+which is one line and catches the obvious case. I compare
+`[start, start + duration)` intervals instead, because the case that actually
+hurts an owner is the near miss: an 08:00 walk lasting 30 minutes and an 08:15
+insulin shot do not share a start time, but they cannot both happen. Exact
+matching would have called that pair fine. The cost is that "conflict" now
+depends on durations being roughly honest — if the owner guesses 30 minutes for
+a walk that really takes 45, the check silently misses the clash.
+
+*Conflict detection is O(n²), deliberately.* I first wrote `find_conflicts()`
+as a sweep line — sort by start time, keep a list of still-active tasks, compare
+each new task only against those. That is O(n log n) and about 20 lines. I then
+rewrote it with `itertools.combinations` in six lines, which compares all pairs
+and is O(n²). I kept the slower one. `n` here is *fixed-time tasks due on a
+single day*, which is a couple of dozen at the very most, so n² is on the order
+of a few hundred comparisons — genuinely free — and the pairwise version reads
+as the definition of the problem ("every pair that overlaps") instead of as an
+algorithm you have to trust. The tests passed unchanged across the swap, which
+is what let me treat it as a pure readability decision rather than a gamble. If
+PawPal+ ever plans a shelter, the sweep is the right call and the docstring
+says so.
+
+*Overlapping fixed-time tasks are dropped, not moved.* When two tasks both want
+09:00, `_pack()` keeps the first and skips the second with a reason. Sliding the
+loser to the next free slot would get more done, but a task is pinned to a time
+precisely because it cannot move — insulin at 09:00 is not the same event as
+insulin at 09:40. Dropping it with a visible warning puts the decision back on
+the owner, which is the honest outcome for the one class of task where guessing
+wrong actually matters.
+
+*Every task recurs.* There is no one-off frequency, so completing anything
+queues another instance. That fits the scenario (feeding, walks and meds all
+repeat) and keeps the model small, but it means a genuinely one-time task — a
+vet visit — has to be deleted after completion rather than simply finished. A
+`Frequency.ONCE` member would fix it and is the first thing I would add.
+
 ---
 
 ## 3. AI Collaboration

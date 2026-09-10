@@ -8,9 +8,10 @@ Planning:    Scheduler reads an Owner's constraints and each Pet's due tasks,
              and returns a DailyPlan of ScheduledTask / SkippedTask entries.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from enum import Enum, IntEnum
+from itertools import combinations
 
 
 class Priority(IntEnum):
@@ -74,6 +75,7 @@ class Task:
     frequency: Frequency = Frequency.DAILY
     weekly_day: int = 0
     preferred_time: time | None = None
+    due_date: date | None = None
     completed: bool = False
 
     def __post_init__(self) -> None:
@@ -101,6 +103,24 @@ class Task:
         """True if this task must happen at a specific clock time."""
         return self.preferred_time is not None
 
+    def window_on(self, day: date) -> tuple[datetime, datetime]:
+        """The start and end datetimes this task would occupy on the given day."""
+        start = datetime.combine(day, self.preferred_time or time.min)
+        return start, start + self.duration
+
+    def next_due_date(self, after: date) -> date:
+        """The next date this task comes around after the given day."""
+        if self.frequency is Frequency.DAILY:
+            return after + timedelta(days=1)
+        # Land on the next matching weekday, never on `after` itself.
+        days_ahead = (self.weekly_day - after.weekday()) % 7 or 7
+        return after + timedelta(days=days_ahead)
+
+    def next_occurrence(self, after: date | None = None) -> "Task":
+        """Return a fresh, uncompleted copy of this task due on its next date."""
+        after = after or self.due_date or date.today()
+        return replace(self, due_date=self.next_due_date(after), completed=False)
+
     def mark_complete(self) -> None:
         """Flag this task as done."""
         self.completed = True
@@ -111,13 +131,19 @@ class Task:
 
     def is_due_on(self, day: date) -> bool:
         """True if this task needs doing on the given day."""
+        if self.due_date is not None:
+            # An overdue task stays due rather than silently disappearing.
+            return day >= self.due_date
         if self.frequency is Frequency.DAILY:
             return True
         return day.weekday() == self.weekly_day
 
     def __str__(self) -> str:
         """One-line description, e.g. 'Morning walk (30 min, high)'."""
-        return f"{self.title} ({self.duration_minutes} min, {self.priority})"
+        details = f"{self.duration_minutes} min, {self.priority}"
+        if self.due_date is not None:
+            details += f", due {self.due_date:%a %b %d}"
+        return f"{self.title} ({details})"
 
 
 @dataclass
@@ -165,9 +191,65 @@ class Pet:
         """Return the pending tasks that need doing on the given day."""
         return [t for t in self.pending_tasks() if t.is_due_on(day)]
 
+    def filter_tasks(
+        self,
+        completed: bool | None = None,
+        priority: "Priority | str | None" = None,
+        frequency: "Frequency | str | None" = None,
+        due_on: date | None = None,
+    ) -> list[Task]:
+        """Return this pet's tasks matching every criterion that was supplied."""
+        tasks = list(self.tasks)
+        if completed is not None:
+            tasks = [t for t in tasks if t.completed is completed]
+        if priority is not None:
+            wanted = Priority.parse(priority)
+            tasks = [t for t in tasks if t.priority is wanted]
+        if frequency is not None:
+            wanted = Frequency.parse(frequency)
+            tasks = [t for t in tasks if t.frequency is wanted]
+        if due_on is not None:
+            tasks = [t for t in tasks if t.is_due_on(due_on)]
+        return tasks
+
+    def complete_task(self, task: Task, today: date | None = None) -> Task | None:
+        """Mark a task done and queue its next occurrence, which is returned.
+
+        This is the recurring-task path: every task in PawPal+ repeats, so
+        finishing today's walk immediately puts tomorrow's walk on the list.
+        Returns None if the task does not belong to this pet.
+        """
+        if not any(existing is task for existing in self.tasks):
+            return None
+        task.mark_complete()
+        follow_up = task.next_occurrence(today or date.today())
+        self.tasks.append(follow_up)
+        return follow_up
+
     def minutes_needed_on(self, day: date) -> int:
         """Total minutes this pet's due tasks would take if all were done."""
         return sum(t.duration_minutes for t in self.tasks_due_on(day))
+
+    def uncomplete_task(self, task: Task, today: date | None = None) -> bool:
+        """Undo a completion, also removing the follow-up it queued.
+
+        Without this, undoing a completion would leave the next occurrence
+        behind as a phantom duplicate. True if a follow-up was removed.
+        """
+        if not any(existing is task for existing in self.tasks):
+            return False
+        task.mark_incomplete()
+        expected_due = task.next_due_date(today or date.today())
+        for index, candidate in enumerate(self.tasks):
+            if (
+                candidate is not task
+                and not candidate.completed
+                and candidate.title == task.title
+                and candidate.due_date == expected_due
+            ):
+                del self.tasks[index]
+                return True
+        return False
 
     def __str__(self) -> str:
         """One-line description, e.g. 'Mochi (dog, Shiba Inu, 3y)'."""
@@ -219,6 +301,27 @@ class Owner:
         """Every task grouped by pet name, so callers keep the owning pet."""
         return {pet.name: list(pet.tasks) for pet in self.pets}
 
+    def filter_tasks(
+        self,
+        pet_name: str | None = None,
+        completed: bool | None = None,
+        priority: "Priority | str | None" = None,
+        frequency: "Frequency | str | None" = None,
+        due_on: date | None = None,
+    ) -> list[Task]:
+        """Return tasks across every pet (or one named pet) matching the criteria."""
+        pets = self.pets if pet_name is None else [p for p in self.pets if p.name == pet_name]
+        return [
+            task
+            for pet in pets
+            for task in pet.filter_tasks(
+                completed=completed,
+                priority=priority,
+                frequency=frequency,
+                due_on=due_on,
+            )
+        ]
+
     def prefers(self, task: Task) -> bool:
         """True if any of this owner's preference keywords match the task."""
         title = task.title.lower()
@@ -262,6 +365,42 @@ class SkippedTask:
     def __str__(self) -> str:
         """One-line row, e.g. 'Grooming (45 min, low) - out of time'."""
         return f"{self.task} - {self.reason}"
+
+
+@dataclass
+class Conflict:
+    """Two fixed-time tasks whose windows overlap, with a warning to show."""
+
+    first_pet: str
+    first: Task
+    second_pet: str
+    second: Task
+    day: date
+
+    @property
+    def message(self) -> str:
+        """A human-readable warning naming both tasks and their time windows."""
+        first = self._window(self.first)
+        second = self._window(self.second)
+        if self.first_pet == self.second_pet:
+            return (
+                f"{self.first_pet}: '{self.first.title}' ({first}) overlaps "
+                f"'{self.second.title}' ({second})"
+            )
+        return (
+            f"'{self.first.title}' for {self.first_pet} ({first}) overlaps "
+            f"'{self.second.title}' for {self.second_pet} ({second}) - "
+            f"you cannot be in two places at once"
+        )
+
+    def _window(self, task: Task) -> str:
+        """Format one task's clock window, e.g. '09:00-09:30'."""
+        start, end = task.window_on(self.day)
+        return f"{start:%H:%M}-{end:%H:%M}"
+
+    def __str__(self) -> str:
+        """The warning message."""
+        return self.message
 
 
 @dataclass
@@ -438,6 +577,54 @@ class Scheduler:
         if owner.prefers(task):
             reason += ", and matches your preferences"
         return reason
+
+    def sort_by_time(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks ordered by their fixed time, with unpinned ones last."""
+        return sorted(
+            tasks,
+            key=lambda task: (task.preferred_time is None, task.preferred_time or time.min),
+        )
+
+    def sort_by_priority(self, tasks: list[Task]) -> list[Task]:
+        """Return tasks ordered highest priority first, then shortest."""
+        return sorted(tasks, key=lambda task: (-int(task.priority), task.duration_minutes))
+
+    def find_conflicts(self, owner: Owner, day: date | None = None) -> list[Conflict]:
+        """Report every pair of fixed-time tasks that would overlap on this day.
+
+        Only tasks with a preferred_time can truly conflict — everything else
+        is free to move, and _pack() slots it around whatever is already fixed.
+        Returns warnings for the caller to display; it never raises.
+
+        This compares all pairs, which is O(n^2). n is the fixed-time tasks due
+        on a single day — a couple of dozen at most — so the readable version
+        wins over the O(n log n) sweep it replaced. Revisit if PawPal+ ever
+        plans a shelter's worth of animals.
+        """
+        day = day or date.today()
+        entries = sorted(
+            (
+                (pet.name, task, *task.window_on(day))
+                for pet in owner.pets
+                for task in pet.tasks_due_on(day)
+                if task.is_anchored
+            ),
+            key=lambda entry: entry[2],
+        )
+        return [
+            Conflict(first_pet, first, second_pet, second, day)
+            for (first_pet, first, first_start, first_end), (
+                second_pet,
+                second,
+                second_start,
+                second_end,
+            ) in combinations(entries, 2)
+            if first_start < second_end and second_start < first_end
+        ]
+
+    def conflict_warnings(self, owner: Owner, day: date | None = None) -> list[str]:
+        """The conflict messages as plain strings, ready to print or display."""
+        return [conflict.message for conflict in self.find_conflicts(owner, day)]
 
     def explain(self, plan: DailyPlan) -> str:
         """Describe in plain language why a plan looks the way it does."""

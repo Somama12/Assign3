@@ -12,6 +12,7 @@ classDiagram
         +get_pet(pet_name) Pet
         +all_tasks() list~Task~
         +tasks_by_pet() dict
+        +filter_tasks(...) list~Task~
         +prefers(task) bool
     }
 
@@ -28,6 +29,9 @@ classDiagram
         +pending_tasks() list~Task~
         +completed_tasks() list~Task~
         +tasks_due_on(day) list~Task~
+        +filter_tasks(...) list~Task~
+        +complete_task(task, today) Task
+        +uncomplete_task(task, today) bool
         +minutes_needed_on(day) int
     }
 
@@ -38,12 +42,16 @@ classDiagram
         +Frequency frequency
         +int weekly_day
         +time preferred_time
+        +date due_date
         +bool completed
         +timedelta duration
         +bool is_anchored
         +mark_complete() None
         +mark_incomplete() None
         +is_due_on(day) bool
+        +window_on(day) tuple
+        +next_due_date(after) date
+        +next_occurrence(after) Task
     }
 
     class Priority {
@@ -68,6 +76,15 @@ classDiagram
         +end_time() time
     }
 
+    class Conflict {
+        +str first_pet
+        +Task first
+        +str second_pet
+        +Task second
+        +date day
+        +str message
+    }
+
     class SkippedTask {
         +Task task
         +str reason
@@ -89,6 +106,10 @@ classDiagram
         +time day_end
         +build_plan(owner, pet, day) DailyPlan
         +build_plans(owner, day) list~DailyPlan~
+        +sort_by_time(tasks) list~Task~
+        +sort_by_priority(tasks) list~Task~
+        +find_conflicts(owner, day) list~Conflict~
+        +conflict_warnings(owner, day) list~str~
         +explain(plan) str
         -_pack(owner, day, candidates, pets) list~DailyPlan~
         -_first_open_slot(day, busy, duration) datetime
@@ -105,3 +126,5 @@ classDiagram
     Scheduler ..> Owner : reads constraints from
     Scheduler ..> Pet : reads due tasks from
     Scheduler ..> DailyPlan : produces one per pet
+    Scheduler ..> Conflict : warns with
+    Conflict --> Task : names the clashing pair

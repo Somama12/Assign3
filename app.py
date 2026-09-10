@@ -179,6 +179,17 @@ if owner.pets:
     st.divider()
     st.subheader("Pets and tasks")
 
+    if st.session_state.get("last_follow_up"):
+        st.success(f"Done — {st.session_state.pop('last_follow_up')}")
+
+    show = st.radio(
+        "Show",
+        ["All", "Pending", "Done"],
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    status = {"All": None, "Pending": False, "Done": True}[show]
+
     # Widget keys and removals use list position, not the name/title: two tasks
     # may legitimately share a title (a morning and an evening "Walk"), and
     # keying on the title both collides and deletes the wrong row.
@@ -194,7 +205,16 @@ if owner.pets:
                 st.caption("No tasks yet.")
                 continue
 
+            visible = pet.filter_tasks(completed=status)
+            if not visible:
+                st.caption(f"No {show.lower()} tasks.")
+                continue
+
+            # enumerate the full list so keys and removals stay aligned with
+            # the real positions, then skip the rows the filter excludes.
             for task_index, task in enumerate(list(pet.tasks)):
+                if not any(task is shown for shown in visible):
+                    continue
                 done_col, text_col, drop_col = st.columns([1.4, 6, 1])
 
                 # A button rather than a checkbox: checkbox state sticks to its
@@ -205,7 +225,16 @@ if owner.pets:
                     "Undo" if task.completed else "Done",
                     key=f"toggle_{pet_index}_{task_index}",
                 ):
-                    task.mark_incomplete() if task.completed else task.mark_complete()
+                    # complete_task queues the next occurrence; uncomplete_task
+                    # takes it back off the list again.
+                    if task.completed:
+                        pet.uncomplete_task(task)
+                    else:
+                        follow_up = pet.complete_task(task)
+                        st.session_state.last_follow_up = (
+                            f"'{follow_up.title}' is back on "
+                            f"{follow_up.due_date:%a %b %d}."
+                        )
                     st.rerun()
 
                 recurrence = (
@@ -213,9 +242,10 @@ if owner.pets:
                     else f"weekly on {WEEKDAYS[task.weekly_day]}"
                 )
                 when = f" · at {task.preferred_time:%H:%M}" if task.is_anchored else ""
+                due = f" · due {task.due_date:%a %b %d}" if task.due_date else ""
                 label = (
                     f"{task.title} — {task.duration_minutes} min · "
-                    f"{task.priority} · {recurrence}{when}"
+                    f"{task.priority} · {recurrence}{when}{due}"
                 )
                 text_col.markdown(f"~~{label}~~" if task.completed else label)
 
@@ -243,6 +273,12 @@ if st.session_state.show_plan:
             day_start=st.session_state.get("day_start", time(8, 0)),
             day_end=st.session_state.get("day_end", time(21, 0)),
         )
+        # Warn before planning: the scheduler resolves overlaps by skipping the
+        # loser, which is safe but silent, so the owner should see the clash.
+        warnings = scheduler.conflict_warnings(owner, day=plan_day)
+        for warning in warnings:
+            st.warning(warning, icon="⚠️")
+
         plans = scheduler.build_plans(owner, day=plan_day)
 
         total_used = sum(plan.minutes_used for plan in plans)
