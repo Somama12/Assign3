@@ -10,6 +10,8 @@ time. Everything else is derived from that one object.
 """
 
 from datetime import date, time
+import os
+from pathlib import Path
 
 import streamlit as st
 
@@ -17,6 +19,7 @@ from main import build_demo_owner
 from pawpal_system import Frequency, Owner, Pet, Priority, Scheduler, Task
 
 WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+DATA_PATH = Path(os.environ.get("PAWPAL_DATA_PATH", Path(__file__).with_name("data.json")))
 
 st.set_page_config(page_title="PawPal+", page_icon="🐾", layout="centered")
 
@@ -46,6 +49,27 @@ def reset_data() -> None:
         preferences=list(owner.preferences),
     )
     st.session_state.show_plan = False
+
+
+def save_snapshot() -> None:
+    """Save this session to disk when the owner explicitly requests it."""
+    try:
+        get_owner().save_to_json(DATA_PATH)
+        st.session_state.storage_message = "Saved pets and tasks to data.json."
+    except OSError as error:
+        st.session_state.storage_error = f"Could not save: {error}"
+
+
+def load_snapshot() -> None:
+    """Restore saved pets and tasks without replacing the session on failure."""
+    try:
+        restored = Owner.load_from_json(DATA_PATH)
+    except (OSError, ValueError) as error:
+        st.session_state.storage_error = f"Could not load: {error}"
+    else:
+        st.session_state.owner = restored
+        st.session_state.show_plan = True
+        st.session_state.storage_message = "Restored pets and tasks from data.json."
 
 
 owner = get_owner()
@@ -95,9 +119,19 @@ with st.sidebar.form("owner_form"):
             st.session_state.day_end = day_end
             st.sidebar.success("Saved.")
 
+scheduler = get_scheduler()
 st.sidebar.divider()
 st.sidebar.button("Load example data", on_click=load_demo_data, use_container_width=True)
 st.sidebar.button("Clear pets and tasks", on_click=reset_data, use_container_width=True)
+st.sidebar.divider()
+st.sidebar.subheader("Keep your care plan")
+st.sidebar.caption("Save before closing. Load saved data restores your last snapshot.")
+st.sidebar.button("Save to JSON", on_click=save_snapshot, use_container_width=True)
+st.sidebar.button("Load saved data", on_click=load_snapshot, use_container_width=True)
+if "storage_message" in st.session_state:
+    st.sidebar.success(st.session_state.pop("storage_message"))
+if "storage_error" in st.session_state:
+    st.sidebar.error(st.session_state.pop("storage_error"))
 
 
 # --- Header -----------------------------------------------------------------
@@ -305,6 +339,8 @@ if st.session_state.show_plan:
     if not owner.all_tasks():
         st.warning("There are no tasks to schedule yet.")
     else:
+        plans = scheduler.build_plans(owner, day=plan_day)
+        kept_ids = {id(item.task) for plan in plans for item in plan.scheduled}
         # Warn before showing the plan. The scheduler resolves an overlap by
         # keeping the earlier task and skipping the later one, which is safe
         # but silent — so the owner needs to see both the clash and what
@@ -318,13 +354,13 @@ if st.session_state.show_plan:
                 )
                 for conflict in conflicts:
                     st.warning(conflict.message, icon="⚠️")
-                    st.caption(
-                        f"PawPal+ will keep **{conflict.first.title}** and skip "
-                        f"**{conflict.second.title}**. Change one of the two "
-                        f"fixed times above if that is the wrong call."
-                    )
-
-        plans = scheduler.build_plans(owner, day=plan_day)
+                    if id(conflict.first) in kept_ids:
+                        resolution = f"keep **{conflict.first.title}** and skip **{conflict.second.title}**"
+                    elif id(conflict.second) in kept_ids:
+                        resolution = f"keep **{conflict.second.title}** and skip **{conflict.first.title}**"
+                    else:
+                        resolution = f"skip both **{conflict.first.title}** and **{conflict.second.title}**"
+                    st.caption(f"PawPal+ will {resolution}. See the plan's reasons below.")
 
         total_used = sum(plan.minutes_used for plan in plans)
         total_planned = sum(len(plan.scheduled) for plan in plans)
@@ -368,3 +404,12 @@ if st.session_state.show_plan:
                 "scheduler places tasks highest-priority-first and never splits "
                 "one, so a leftover gap can be too short for anything remaining."
             )
+
+with st.expander("Find room for another care task"):
+    extra_minutes = st.number_input("New task duration (minutes)", min_value=1, max_value=720, value=10)
+    slot = scheduler.next_available_slot(owner, int(extra_minutes), plan_day)
+    if slot is None:
+        st.info("No slot fits both the day window and your remaining time budget.")
+    else:
+        st.success(f"Next available slot: {slot:%H:%M} on {plan_day:%b %d}.")
+        st.caption("A suggestion based on all pets' generated plans; this does not add a task.")

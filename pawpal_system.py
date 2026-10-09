@@ -8,10 +8,13 @@ Planning:    Scheduler reads an Owner's constraints and each Pet's due tasks,
              and returns a DailyPlan of ScheduledTask / SkippedTask entries.
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
 from datetime import date, datetime, time, timedelta
 from enum import Enum, IntEnum
 from itertools import combinations
+import json
+from pathlib import Path
+from uuid import uuid4
 
 
 class Priority(IntEnum):
@@ -77,6 +80,8 @@ class Task:
     preferred_time: time | None = None
     due_date: date | None = None
     completed: bool = False
+    task_id: str = field(default_factory=lambda: uuid4().hex)
+    follow_up_id: str | None = None
 
     def __post_init__(self) -> None:
         """Validate the duration and accept plain strings for the enum fields."""
@@ -119,7 +124,8 @@ class Task:
     def next_occurrence(self, after: date | None = None) -> "Task":
         """Return a fresh, uncompleted copy of this task due on its next date."""
         after = after or self.due_date or date.today()
-        return replace(self, due_date=self.next_due_date(after), completed=False)
+        return replace(self, due_date=self.next_due_date(after), completed=False,
+                       task_id=uuid4().hex, follow_up_id=None)
 
     def mark_complete(self) -> None:
         """Flag this task as done."""
@@ -217,12 +223,15 @@ class Pet:
 
         This is the recurring-task path: every task in PawPal+ repeats, so
         finishing today's walk immediately puts tomorrow's walk on the list.
-        Returns None if the task does not belong to this pet.
+        Returns None if the task is already complete or belongs to another pet.
         """
         if not any(existing is task for existing in self.tasks):
             return None
+        if task.completed:
+            return None
         task.mark_complete()
         follow_up = task.next_occurrence(today or date.today())
+        task.follow_up_id = follow_up.task_id
         self.tasks.append(follow_up)
         return follow_up
 
@@ -239,15 +248,14 @@ class Pet:
         if not any(existing is task for existing in self.tasks):
             return False
         task.mark_incomplete()
-        expected_due = task.next_due_date(today or date.today())
         for index, candidate in enumerate(self.tasks):
             if (
                 candidate is not task
                 and not candidate.completed
-                and candidate.title == task.title
-                and candidate.due_date == expected_due
+                and candidate.task_id == task.follow_up_id
             ):
                 del self.tasks[index]
+                task.follow_up_id = None
                 return True
         return False
 
@@ -326,6 +334,61 @@ class Owner:
         """True if any of this owner's preference keywords match the task."""
         title = task.title.lower()
         return any(p.strip().lower() in title for p in self.preferences if p.strip())
+
+    def save_to_json(self, path: str | Path = "data.json") -> None:
+        """Save the owner, pets and tasks as a versioned JSON snapshot."""
+        def encode(value):
+            if isinstance(value, (date, time)):
+                return value.isoformat()
+            raise TypeError(f"Cannot serialize {type(value).__name__}")
+
+        destination = Path(path)
+        payload = json.dumps({"version": 1, "owner": asdict(self)},
+                             default=encode, indent=2, ensure_ascii=False)
+        # Replace only after serialization and writing succeed.
+        temporary = destination.with_suffix(destination.suffix + ".tmp")
+        temporary.write_text(payload + "\n", encoding="utf-8")
+        temporary.replace(destination)
+
+    @classmethod
+    def load_from_json(cls, path: str | Path = "data.json") -> "Owner":
+        """Restore a snapshot, rejecting malformed data before changing the app."""
+        try:
+            document = json.loads(Path(path).read_text(encoding="utf-8"))
+            if document["version"] != 1:
+                raise ValueError("unsupported snapshot version")
+            data = document["owner"]
+            pets = []
+            for pet_data in data["pets"]:
+                tasks = []
+                for raw_task in pet_data["tasks"]:
+                    task_data = dict(raw_task)
+                    for name, parser in (("due_date", date.fromisoformat),
+                                         ("preferred_time", time.fromisoformat)):
+                        if task_data.get(name) is not None:
+                            task_data[name] = parser(task_data[name])
+                    if type(task_data["completed"]) is not bool:
+                        raise ValueError("completion status must be a boolean")
+                    if type(task_data["duration_minutes"]) is not int:
+                        raise ValueError("duration must be an integer")
+                    if not isinstance(task_data["title"], str):
+                        raise ValueError("task title must be text")
+                    tasks.append(Task(**task_data))
+                pet_fields = {key: value for key, value in pet_data.items() if key != "tasks"}
+                if not isinstance(pet_fields["name"], str) or not isinstance(pet_fields["species"], str):
+                    raise ValueError("pet name and species must be text")
+                pets.append(Pet(**pet_fields, tasks=tasks))
+            owner_fields = {key: value for key, value in data.items() if key != "pets"}
+            owner = cls(**owner_fields, pets=pets)
+            if (not isinstance(owner.name, str)
+                    or type(owner.minutes_available) is not int
+                    or owner.minutes_available < 0
+                    or not isinstance(owner.preferences, list)
+                    or not all(isinstance(value, str) for value in owner.preferences)):
+                raise ValueError("invalid owner fields")
+            return owner
+        except (KeyError, TypeError, ValueError, AttributeError) as error:
+            raise ValueError(f"Invalid PawPal snapshot: {error}") from error
 
     def __str__(self) -> str:
         """One-line description, e.g. 'Jordan (90 min today, 2 pets)'."""
@@ -566,6 +629,24 @@ class Scheduler:
                 return cursor
             cursor = max(cursor, end)
         return cursor if day_end - cursor >= duration else None
+
+    def next_available_slot(
+        self, owner: Owner, duration_minutes: int, day: date | None = None
+    ) -> time | None:
+        """Find space after planning all pets, respecting the shared time budget."""
+        if type(duration_minutes) is not int or duration_minutes <= 0:
+            raise ValueError("duration_minutes must be a positive integer")
+        day = day or date.today()
+        plans = self.build_plans(owner, day)
+        if sum(plan.minutes_used for plan in plans) + duration_minutes > owner.minutes_available:
+            return None
+        busy = []
+        for plan in plans:
+            for item in plan.scheduled:
+                start = datetime.combine(day, item.start_time)
+                busy.append((start, start + item.task.duration))
+        slot = self._first_open_slot(day, busy, timedelta(minutes=duration_minutes))
+        return slot.time() if slot is not None else None
 
     def _budget_reason(self, task: Task, budget: int, used: int) -> str:
         """Explain that a task was dropped for lack of time."""

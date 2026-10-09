@@ -9,6 +9,7 @@ reproducible — the weekly grooming task is only due on Mondays.
 """
 
 from datetime import date, time
+import argparse
 
 from pawpal_system import (
     DailyPlan,
@@ -249,13 +250,33 @@ def show_conflict_detection(scheduler: Scheduler) -> None:
 
 def main() -> None:
     """Run every demo section in order."""
-    owner = build_demo_owner()
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--save", metavar="FILE", help="Save the final demo state as JSON")
+    parser.add_argument("--load", metavar="FILE", help="Display a previously saved household")
+    args = parser.parse_args()
+    try:
+        owner = Owner.load_from_json(args.load) if args.load else build_demo_owner()
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
     scheduler = Scheduler(day_start=time(8, 0), day_end=time(21, 0))
 
     show_daily_plan(owner, scheduler)
-    show_sorting_and_filtering(owner, scheduler)
-    show_recurring_tasks(owner)
-    show_conflict_detection(scheduler)
+    section("HOUSEHOLD PRIORITY ORDER")
+    print_tasks(scheduler.sort_by_priority(owner.filter_tasks(completed=False, due_on=PLANNING_DAY)))
+    section("NEXT AVAILABLE SLOT")
+    for duration in (10, 15):
+        slot = scheduler.next_available_slot(owner, duration, PLANNING_DAY)
+        print(f"  {duration} min: {slot.strftime('%H:%M') if slot else 'no slot within the shared budget'}")
+    if not args.load:
+        show_sorting_and_filtering(owner, scheduler)
+        show_recurring_tasks(owner)
+        show_conflict_detection(scheduler)
+    if args.save:
+        try:
+            owner.save_to_json(args.save)
+        except OSError as error:
+            parser.error(str(error))
+        print(f"\nSaved {len(owner.pets)} pets and {len(owner.all_tasks())} tasks to {args.save}")
     print()
 
 
