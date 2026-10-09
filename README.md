@@ -311,8 +311,8 @@ The app has no multi-user storage, timezone model, or optimal scheduling solver.
 [ai_interactions.md](ai_interactions.md) records the agent workflow and a
 reproducible comparison of minimal versus constraint-focused prompting briefs,
 using the same Codex session. It does not claim a second model was consulted.
-[reflection.md](reflection.md) preserves the existing reflection and adds this
-session's verified changes. The student's personal review/decision remains theirs.
+[reflection.md](reflection.md) contains the completed AI-assisted reflection on
+the design, tradeoffs, testing, and final implementation decisions.
 
 | Bonus | Evidence |
 |---|---|
