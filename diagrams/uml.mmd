@@ -19,6 +19,8 @@ classDiagram
         +tasks_by_pet() dict
         +filter_tasks(...) list~Task~
         +prefers(task) bool
+        +save_to_json(path) None
+        +load_from_json(path) Owner
     }
 
     class Pet {
@@ -49,6 +51,8 @@ classDiagram
         +time preferred_time
         +date due_date
         +bool completed
+        +str task_id
+        +str follow_up_id
         +timedelta duration
         +bool is_anchored
         +mark_complete() None
@@ -111,6 +115,7 @@ classDiagram
         +time day_end
         +build_plan(owner, pet, day) DailyPlan
         +build_plans(owner, day) list~DailyPlan~
+        +next_available_slot(owner, duration_minutes, day) time
         +sort_by_time(tasks) list~Task~
         +sort_by_priority(tasks) list~Task~
         +find_conflicts(owner, day) list~Conflict~

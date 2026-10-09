@@ -405,3 +405,44 @@ assistant was never short of things to add — a cache, a database, a
 `recurrence` field three phases before anything read it. Saying no to most of
 them, and yes to the small number that the scenario actually demanded, was the
 part of this project that was genuinely mine.
+
+---
+
+## 6. October 9, 2026 extension audit — Codex-assisted addendum
+
+**Attribution.** Sections 1–5 above were already present in the repository when
+this session began and are preserved as the earlier reflection. Their test counts
+and coverage statements describe that earlier work, not the current suite. This
+addendum records observed changes without inventing new first-person student
+experiences or claiming to have verified the earlier chat history.
+
+**Design decisions.** The extension kept Owner → Pet → Task ownership and placed
+JSON save/load on Owner so one snapshot captures the entire household. ISO strings
+represent dates/times, and loading restores the concrete dataclass and enum types.
+The next-slot feature reuses Scheduler's shared plan rather than independently
+scheduling each pet. Stable task/follow-up IDs make undo reliable across saved
+snapshots and distinguish tasks that happen to have the same title.
+
+**Accepted and rejected approaches.** The agent accepted reusing the existing
+planner and rejected the minimal slot scan after executing counterexamples: the
+scan ignored flexible tasks and the owner's remaining budget. See the reproducible
+comparison in `ai_interactions.md`. Explicit JSON snapshots were chosen over a
+new database dependency because this remains a small local application.
+
+**Correctness verification.** All 108 tests passed, including 21 new cases for
+persistence, UI restoration, recurrence identity and slot constraints. Current
+logic line coverage is 99%; this supersedes the earlier 100% claim for the smaller
+implementation. The CLI save and load ran in separate Python processes, and the
+README contains actual terminal output. UI tests also checked that equal-time
+conflict captions reflect which task the planner really keeps.
+
+**Tradeoffs.** Save/load is explicit, not automatic; users must save before closing.
+One local snapshot is not multi-user storage. The next-slot suggestion includes
+only the generated plan and does not reserve a new task or solve a global
+optimization problem. Fixed-time tasks retain precedence over flexible tasks.
+The original limitations around one-time events and local-only time handling remain.
+
+**Student review still needed.** Confirm or revise the implementation decision in
+the prompt comparison, and add any personal learning or manual corrections after
+reviewing the code. The agent cannot truthfully supply those experiences for the
+student. No new separate model/chat sessions were used for this extension audit.
